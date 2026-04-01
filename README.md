@@ -1,50 +1,60 @@
-# Welcome to your Expo app 👋
+# Lab-to-Language Health Companion App (Local AI Edition)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+## Core Goal
+A privacy-first, cross-platform mobile application that translates complex medical lab results into empathetic language. By running the Med-Gemma model locally on the user's phone, it analyzes lab report images and correlates them with wearable data (via Apple Health/Google Health Connect) without sending sensitive medical queries to the cloud.
 
-## Get started
+## Key Architectural Drivers: Absolute Privacy & Cost-Efficiency
+
+### Privacy (Zero-Cloud Data)
+Medical data (PHI) is highly sensitive. By processing the lab report and health data entirely on-device, the app eliminates the risk of data interception, bypasses complex HIPAA/GDPR cloud server compliance, and ensures data never leaves the phone unless explicitly backed up by the user.
+
+### Offline Capability & Zero Cloud Costs
+While local inference introduces slight compute latency (e.g., 5-15 seconds for the smartphone CPU/NPU to process the image and generate the summary), it completely eliminates network latency and per-query API costs. For asynchronous tasks like translating lab results, this local processing time is highly acceptable and guarantees the app works perfectly even in airplane mode.
+
+## 1. Frontend & On-Device AI Layer (Mobile App)
+
+- **Framework**: React Native (Expo).
+- **Health Data Integration**: HealthKit (iOS) / Health Connect (Android) APIs to securely pull historical health metrics (Resting Heart Rate, Sleep Stages, Step Count, HRV) directly on the device.
+- **On-Device Inference Engine**: Google AI Edge (LiteRT / MediaPipe LLM Inference API).
+- **Function**: Runs the quantized Med-Gemma 4B model completely offline. Modern smartphones with 6GB+ RAM can load the model directly into memory and execute it using the phone's CPU/NPU.
+
+**UI/UX Components:**
+- Secure camera interface for scanning physical lab documents.
+- A "Translation Dashboard" that displays the simplified lab results alongside graphs of the user's relevant wearable data.
+- An offline conversational UI to ask follow-up questions about the results.
+
+## 2. The Local Prompt Architecture (Med-Gemma Inference)
+
+- **Input 1 (Vision)**: The raw image of the lab report passed directly to Med-Gemma's multimodal vision encoder on the device.
+- **Input 2 (Text Context)**: A structured JSON of the user's recent wearable data pulled locally.
+- **System Prompt**: "You are an empathetic medical assistant. Analyze the provided lab report image and translate the results into patient-friendly language at a 9th-grade reading level. Correlate the findings with the provided wearable health data trends. Do not diagnose; advise consulting a physician."
+- **Output**: A structured JSON payload containing simplified_explanation, health_data_correlation, and suggested_questions_for_doctor.
+
+## 3. Cloud & Backend Layer (Google Cloud Platform)
+
+Note: The cloud layer is now drastically reduced to maximize privacy and reduce operational costs.
+
+- **Authentication**: Firebase Auth (Ensures secure, HIPAA-compliant user sign-ins).
+- **Storage Backup**: Cloud Firestore.
+- **Function**: Acts purely as an encrypted, opt-in backup for the user's translated summaries and chat history. The raw lab images and the active AI processing never leave the device.
+
+## 4. Data Flow Summary
+
+1. User takes a photo of a lab report via the App.
+2. App securely queries local Apple Health/Health Connect for the last 30 days of data.
+3. App bundles the Image + Health JSON and passes them to the local LiteRT/MediaPipe engine.
+4. Local Med-Gemma executes entirely on the phone's hardware, generating the empathetic translation and health correlations (approx. 5-15s compute time).
+5. App displays the result to the user (fully functional offline).
+6. (Optional) App syncs the final text summary to Firestore for cross-device backup.
+
+## Setup Instructions
 
 1. Install dependencies
-
    ```bash
    npm install
    ```
 
 2. Start the app
-
    ```bash
    npx expo start
    ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
