@@ -5,6 +5,10 @@ options:
     iOS: "26.0"
   xcodeVersion: "16.0"
   generateEmptyDirectories: true
+  fileTypes:
+    icon:
+      file: true
+      lastKnownFileType: folder.iconcomposer.icon
 
 settings:
   base:
