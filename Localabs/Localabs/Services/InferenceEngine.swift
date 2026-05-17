@@ -621,8 +621,7 @@ final class InferenceEngine: ObservableObject {
         \(behaviorPrompt)
 
         User's Personal Health Context:
-        - Known Medical Conditions: \(profile.medicalConditions.isEmpty ? "None reported" : profile.medicalConditions)
-        - Current Daily Medications: \(profile.medications.isEmpty ? "None reported" : profile.medications)
+        \(profile.promptContextBullets)
         - Resting HR (30-day avg): \(healthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")
         - Sleep (30-day avg): \(healthMetrics.avgSleepHours.map { "\($0) hours" } ?? "Unknown")
         - HRV (30-day avg): \(healthMetrics.avgHRV.map { "\($0) ms" } ?? "Unknown")
@@ -765,8 +764,7 @@ final class InferenceEngine: ObservableObject {
         "\(selectedText)"
 
         User's medical context:
-        - Conditions: \(profile.medicalConditions.isEmpty ? "None reported" : profile.medicalConditions)
-        - Medications: \(profile.medications.isEmpty ? "None reported" : profile.medications)
+        \(profile.promptContextBullets)
 
         User's recent Apple Health data (30-day averages — use only if relevant to the question):
         - Resting HR: \(healthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")

@@ -39,4 +39,30 @@ struct UserProfile: Codable {
     static func reset() {
         UserDefaults.standard.removeObject(forKey: storageKey)
     }
+
+    /// Formatted bullet list of every onboarding field that's been
+    /// filled in. Inserted into both the lab-analysis prompt and the
+    /// follow-up chat prompt so the model has the user's age, sex,
+    /// blood type, family history, etc. as context — reference
+    /// ranges for many lab values shift with these variables and the
+    /// AI should weight findings accordingly. Empty fields are
+    /// skipped rather than rendered as "None" so the prompt stays
+    /// tight on users who only filled in a subset.
+    var promptContextBullets: String {
+        var lines: [String] = []
+        if !age.isEmpty { lines.append("- Age: \(age)") }
+        if !biologicalSex.isEmpty {
+            let sex = biologicalSex == "Other" && !biologicalSexOther.isEmpty
+                ? "Other (\(biologicalSexOther))"
+                : biologicalSex
+            lines.append("- Biological Sex: \(sex)")
+        }
+        if !bloodType.isEmpty { lines.append("- Blood Type: \(bloodType)") }
+        if !smoking.isEmpty { lines.append("- Tobacco / E-cig: \(smoking)") }
+        if !alcohol.isEmpty { lines.append("- Alcohol: \(alcohol)") }
+        if !familyHistory.isEmpty { lines.append("- Family History: \(familyHistory)") }
+        if !medicalConditions.isEmpty { lines.append("- Known Medical Conditions: \(medicalConditions)") }
+        if !medications.isEmpty { lines.append("- Current Daily Medications: \(medications)") }
+        return lines.isEmpty ? "- No profile context provided." : lines.joined(separator: "\n        ")
+    }
 }
