@@ -144,7 +144,7 @@ struct ProfileView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "iphone.gen3.radiowaves.left.and.right")
                         .font(.caption)
-                    Text("Keep Localabs open for fastest download (~5–10 min on Wi-Fi). Backgrounding the app slows it down a lot — iOS throttles transfers from inactive apps.")
+                    Text("Keep Localabs open for fastest download (~5–10 min on Wi-Fi).")
                         .font(.caption)
                 }
                 .foregroundStyle(.secondary)
