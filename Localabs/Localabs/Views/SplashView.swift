@@ -24,9 +24,11 @@ struct SplashView: View {
     /// Chip's base render size before zoom — matches the brand
     /// mark's natural sticker size on iPhone screens.
     private let chipBase: CGFloat = 160
-    /// Heart hole base diameter — matches the brand's heart-inside-
-    /// chip proportions.
-    private let heartBase: CGFloat = 60
+    /// Heart hole base diameter. Sized to about 28% of the chip so
+    /// it sits comfortably inside the chip body rather than
+    /// crowding the edges — earlier 60pt (37.5% of chip) looked
+    /// oversized against the brand mark.
+    private let heartBase: CGFloat = 45
 
     var body: some View {
         ZStack {
@@ -47,12 +49,12 @@ struct SplashView: View {
         }
         .onAppear {
             animationTrigger.toggle()
-            // Total keyframe runtime ~1.62s. Fire onComplete just
+            // Total keyframe runtime ~2.10s. Fire onComplete just
             // past the end — by that point the heart hole has
             // exceeded any iPhone screen by ~6×, so the parent
             // dismissing the splash is invisible (ContentView is
             // already fully visible).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.65) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.15) {
                 onComplete()
             }
         }
@@ -79,8 +81,8 @@ struct SplashView: View {
                         // Holds at 1.0 through the pulses, then
                         // grows during the zoom so the chip flies
                         // past the camera.
-                        LinearKeyframe(1.0, duration: 1.07)
-                        CubicKeyframe(8.0, duration: 0.55)
+                        LinearKeyframe(1.0, duration: 1.39)
+                        CubicKeyframe(8.0, duration: 0.70)
                     }
                 }
                 .keyframeAnimator(
@@ -93,8 +95,8 @@ struct SplashView: View {
                         // Chip fades out as the zoom begins so it
                         // doesn't visually compete with the
                         // expanding heart hole.
-                        LinearKeyframe(1.0, duration: 1.20)
-                        CubicKeyframe(0.0, duration: 0.35)
+                        LinearKeyframe(1.0, duration: 1.55)
+                        CubicKeyframe(0.0, duration: 0.45)
                     }
                 }
         }
@@ -118,25 +120,25 @@ struct SplashView: View {
                 // seamless — the racing pulse peak hands off
                 // directly into the zoom acceleration with no gap.
                 KeyframeTrack {
-                    // beat 1 — ~75 bpm
-                    CubicKeyframe(1.18, duration: 0.20)
-                    CubicKeyframe(1.00, duration: 0.20)
-                    // beat 2 — ~105 bpm
-                    CubicKeyframe(1.22, duration: 0.14)
-                    CubicKeyframe(1.00, duration: 0.14)
-                    // beat 3 — ~150 bpm
-                    CubicKeyframe(1.26, duration: 0.10)
-                    CubicKeyframe(1.00, duration: 0.10)
-                    // beat 4 — ~200 bpm
-                    CubicKeyframe(1.30, duration: 0.07)
-                    CubicKeyframe(1.00, duration: 0.07)
+                    // beat 1 — ~58 bpm (relaxed)
+                    CubicKeyframe(1.18, duration: 0.26)
+                    CubicKeyframe(1.00, duration: 0.26)
+                    // beat 2 — ~83 bpm
+                    CubicKeyframe(1.22, duration: 0.18)
+                    CubicKeyframe(1.00, duration: 0.18)
+                    // beat 3 — ~115 bpm
+                    CubicKeyframe(1.26, duration: 0.13)
+                    CubicKeyframe(1.00, duration: 0.13)
+                    // beat 4 — ~165 bpm
+                    CubicKeyframe(1.30, duration: 0.09)
+                    CubicKeyframe(1.00, duration: 0.09)
                     // beat 5 — racing peak, holds briefly
-                    CubicKeyframe(1.35, duration: 0.05)
+                    CubicKeyframe(1.35, duration: 0.07)
                     // ZOOM — heart hole grows past the screen.
                     // 60× makes it exceed any iPhone screen by ~6×,
                     // so the user sees ContentView with no visible
                     // hole boundary at the end of the animation.
-                    CubicKeyframe(60.0, duration: 0.55)
+                    CubicKeyframe(60.0, duration: 0.70)
                 }
             }
             .blendMode(.destinationOut)
@@ -154,8 +156,8 @@ struct SplashView: View {
                 content.opacity(opacity)
             } keyframes: { _ in
                 KeyframeTrack {
-                    LinearKeyframe(1.0, duration: 0.95)
-                    CubicKeyframe(0.0, duration: 0.20)
+                    LinearKeyframe(1.0, duration: 1.24)
+                    CubicKeyframe(0.0, duration: 0.25)
                 }
             }
     }
