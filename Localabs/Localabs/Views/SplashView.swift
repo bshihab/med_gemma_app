@@ -45,6 +45,15 @@ struct SplashView: View {
                         .compositingGroup()
                 }
 
+            // Solid white heart sitting EXACTLY over the mask hole —
+            // identical keyframe track so they scale + pulse in
+            // lockstep. During the pulse phase this layer is opaque
+            // and the user sees a clean white heart (not ContentView
+            // peeking through the hole). During the zoom phase it
+            // fades to 0, revealing whatever the now-massive hole
+            // is showing underneath (ContentView).
+            heartFill
+
             wordmark
         }
         .onAppear {
@@ -142,6 +151,56 @@ struct SplashView: View {
                 }
             }
             .blendMode(.destinationOut)
+    }
+
+    /// White heart fill that covers the mask hole during the pulse
+    /// phase so ContentView doesn't peek through. The scale keyframe
+    /// track is identical to `heartHole`'s so the two views move in
+    /// perfect sync. A separate opacity keyframe track fades this
+    /// layer out as the zoom kicks in, at which point the hole
+    /// underneath does its job and reveals ContentView.
+    private var heartFill: some View {
+        Image(systemName: "heart.fill")
+            .resizable()
+            .aspectRatio(contentMode: .fit)
+            .foregroundStyle(.white)
+            .frame(width: heartBase, height: heartBase)
+            .keyframeAnimator(
+                initialValue: 1.0,
+                trigger: animationTrigger
+            ) { content, scale in
+                content.scaleEffect(scale, anchor: .center)
+            } keyframes: { _ in
+                // MUST match heartHole's scale track exactly.
+                KeyframeTrack {
+                    CubicKeyframe(1.18, duration: 0.26)
+                    CubicKeyframe(1.00, duration: 0.26)
+                    CubicKeyframe(1.22, duration: 0.18)
+                    CubicKeyframe(1.00, duration: 0.18)
+                    CubicKeyframe(1.26, duration: 0.13)
+                    CubicKeyframe(1.00, duration: 0.13)
+                    CubicKeyframe(1.30, duration: 0.09)
+                    CubicKeyframe(1.00, duration: 0.09)
+                    CubicKeyframe(1.35, duration: 0.07)
+                    CubicKeyframe(60.0, duration: 0.70)
+                }
+            }
+            .keyframeAnimator(
+                initialValue: 1.0,
+                trigger: animationTrigger
+            ) { content, opacity in
+                content.opacity(opacity)
+            } keyframes: { _ in
+                // Stays opaque through the pulse phase, fades out
+                // during the zoom. Slightly faster fade than the
+                // chip — the white heart should be gone by the
+                // time the hole has grown enough for ContentView
+                // to dominate the visible area.
+                KeyframeTrack {
+                    LinearKeyframe(1.0, duration: 1.39)
+                    CubicKeyframe(0.0, duration: 0.35)
+                }
+            }
     }
 
     private var wordmark: some View {
