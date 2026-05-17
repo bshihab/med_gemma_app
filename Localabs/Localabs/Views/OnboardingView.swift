@@ -57,7 +57,11 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    stepHeader(step: 1, title: "Health Details")
+                    stepHeader(
+                        step: 1,
+                        title: "Health Details",
+                        subtitle: "Localabs uses this to personalize the on-device AI for you — age and sex shift reference ranges for many lab values, so your translations stay accurate to your body."
+                    )
 
                     // Age lives in its OWN glass card, isolated from
                     // the Sex + Blood Type pickers below. Earlier it
@@ -116,7 +120,11 @@ struct OnboardingView: View {
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    stepHeader(step: 2, title: "Clinical Details")
+                    stepHeader(
+                        step: 2,
+                        title: "Clinical Details",
+                        subtitle: "Family history, medications, and lifestyle factors directly affect how the AI should weight specific lab findings. Everything you share here is folded into every analysis — and stays on your phone."
+                    )
 
                     VStack(spacing: 0) {
                         labeledRow("Tobacco / E-Cig") {
@@ -246,14 +254,21 @@ struct OnboardingView: View {
         .padding(.bottom, 20)
     }
 
-    private func stepHeader(step: Int, title: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func stepHeader(step: Int, title: String, subtitle: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text("STEP \(step) OF 3")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .tracking(1.5)
             Text(title)
                 .font(.system(size: 34, weight: .bold))
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 6)
+            }
         }
         .padding(.horizontal)
     }
