@@ -59,13 +59,25 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     stepHeader(step: 1, title: "Health Details")
 
+                    // Age lives in its OWN glass card, isolated from
+                    // the Sex + Blood Type pickers below. Earlier it
+                    // shared one glass-effect VStack with the two
+                    // pickers, and every keystroke in Age forced the
+                    // entire 3-row glass to recompute its blur — that
+                    // was the source of the typing lag. With Age in
+                    // its own card, only this small surface re-renders
+                    // on each character.
                     VStack(spacing: 0) {
                         labeledRow("Age") {
                             TextField("25", text: $profile.age)
                                 .keyboardType(.numberPad)
                                 .multilineTextAlignment(.trailing)
                         }
-                        Divider().padding(.horizontal, 16)
+                    }
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .padding(.horizontal)
+
+                    VStack(spacing: 0) {
                         labeledRow("Biological Sex") {
                             Picker("", selection: $profile.biologicalSex) {
                                 Text("Not Set").tag("")
@@ -297,31 +309,37 @@ struct OnboardingView: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
+    /// Plain HStack instead of GlassEffectContainer — the container
+    /// recomputed its morph layout every time the Continue button's
+    /// `disabled` state flipped, which on Step 1 happened on every
+    /// keystroke in the Age field (the disabled gate watches
+    /// `profile.age.isEmpty`). That manifested as visible per-character
+    /// typing lag. Each button keeps its individual .glass / .glassProminent
+    /// style so the visual treatment is identical — just no shared
+    /// morph container.
     private func navigationButtons(back: (() -> Void)?, next: @escaping () -> Void, nextDisabled: Bool = false) -> some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                if let back = back {
-                    Button {
-                        back()
-                    } label: {
-                        Text("Back")
-                            .font(.system(size: 17, weight: .semibold))
-                            .padding(.vertical, 12)
-                            .frame(width: 100)
-                    }
-                    .buttonStyle(.glass)
-                }
+        HStack(spacing: 12) {
+            if let back = back {
                 Button {
-                    next()
+                    back()
                 } label: {
-                    Text("Continue")
+                    Text("Back")
                         .font(.system(size: 17, weight: .semibold))
                         .padding(.vertical, 12)
-                        .frame(maxWidth: .infinity)
+                        .frame(width: 100)
                 }
-                .buttonStyle(.glassProminent)
-                .disabled(nextDisabled)
+                .buttonStyle(.glass)
             }
+            Button {
+                next()
+            } label: {
+                Text("Continue")
+                    .font(.system(size: 17, weight: .semibold))
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.glassProminent)
+            .disabled(nextDisabled)
         }
         .padding(.horizontal, 24)
         .padding(.bottom, 40)

@@ -58,47 +58,51 @@ struct SplashView: View {
                             .opacity(beats.contentOpacity)
                     } keyframes: { _ in
                         // Heartbeat: 5 accelerating pulses, then a
-                        // hold while the zoom takes over.
+                        // hold while the zoom takes over. Durations
+                        // ~40% longer than the previous version —
+                        // earlier timing felt rushed; now the user
+                        // has time to register each beat before the
+                        // tempo shifts.
                         KeyframeTrack(\.heartScale) {
-                            // beat 1 — slow (~60 bpm)
-                            CubicKeyframe(1.10, duration: 0.30)
-                            CubicKeyframe(1.00, duration: 0.30)
-                            // beat 2 — ~85 bpm
-                            CubicKeyframe(1.13, duration: 0.22)
+                            // beat 1 — slow (~45 bpm)
+                            CubicKeyframe(1.10, duration: 0.45)
+                            CubicKeyframe(1.00, duration: 0.45)
+                            // beat 2 — ~65 bpm
+                            CubicKeyframe(1.13, duration: 0.32)
+                            CubicKeyframe(1.00, duration: 0.32)
+                            // beat 3 — ~95 bpm
+                            CubicKeyframe(1.17, duration: 0.22)
                             CubicKeyframe(1.00, duration: 0.22)
-                            // beat 3 — ~120 bpm
-                            CubicKeyframe(1.17, duration: 0.16)
-                            CubicKeyframe(1.00, duration: 0.16)
-                            // beat 4 — ~170 bpm
-                            CubicKeyframe(1.22, duration: 0.11)
-                            CubicKeyframe(1.00, duration: 0.11)
-                            // beat 5 — ~250 bpm (racing) — hold the
+                            // beat 4 — ~140 bpm
+                            CubicKeyframe(1.22, duration: 0.14)
+                            CubicKeyframe(1.00, duration: 0.14)
+                            // beat 5 — ~200 bpm (racing) — hold the
                             // peak so it merges into the zoom.
-                            CubicKeyframe(1.30, duration: 0.08)
+                            CubicKeyframe(1.30, duration: 0.10)
                         }
 
-                        // Zoom: holds at 1.0 through the pulses,
-                        // then accelerates to 22× over 0.6s. EaseIn
-                        // for the "flying in" feel.
+                        // Zoom holds at 1.0 through the pulses, then
+                        // accelerates to 22× over 0.8s. EaseIn for the
+                        // "flying in" feel.
                         KeyframeTrack(\.zoomScale) {
-                            LinearKeyframe(1.0, duration: 1.86)
-                            CubicKeyframe(22.0, duration: 0.55)
+                            LinearKeyframe(1.0, duration: 2.62)
+                            CubicKeyframe(22.0, duration: 0.80)
                         }
 
-                        // Splash opacity: stays full through pulse +
+                        // Splash opacity stays full through pulse +
                         // zoom; fades to 0 only at the end, after
                         // the white heart has filled the screen.
                         KeyframeTrack(\.contentOpacity) {
-                            LinearKeyframe(1.0, duration: 2.22)
-                            CubicKeyframe(0.0, duration: 0.20)
+                            LinearKeyframe(1.0, duration: 3.17)
+                            CubicKeyframe(0.0, duration: 0.25)
                         }
 
                         // Wordmark fades out at the moment the racing
                         // pulse hits, so it doesn't visually compete
                         // with the zoom that follows.
                         KeyframeTrack(\.wordmarkOpacity) {
-                            LinearKeyframe(1.0, duration: 1.55)
-                            CubicKeyframe(0.0, duration: 0.25)
+                            LinearKeyframe(1.0, duration: 2.20)
+                            CubicKeyframe(0.0, duration: 0.30)
                         }
                     }
             }
@@ -125,10 +129,11 @@ struct SplashView: View {
         }
         .onAppear {
             animationTrigger.toggle()
-            // Total keyframe runtime ~2.42s; fire onComplete just
-            // past the end so the last frame renders before
-            // ContentView takes over.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.45) {
+            // Total keyframe runtime ~3.42s with the slower pacing
+            // (~40% longer beats). Fire onComplete just past the
+            // end so the last frame renders before ContentView
+            // takes over.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.45) {
                 onComplete()
             }
         }
