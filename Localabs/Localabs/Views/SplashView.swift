@@ -163,10 +163,10 @@ struct SplashView: View {
     }
 }
 
-/// Layered logo built from the user's brand PNGs. Kept around so
-/// the existing LogoExportTool + Profile "Export Logo Layers" dev
-/// button can still produce per-layer renders without re-introducing
-/// the SwiftUI vector recreation.
+/// Layered logo built from the user's brand PNGs. Two stacked
+/// Image() resources at matching canvas alignment — the heart sits
+/// exactly where it should over the chip. Used by the splash and
+/// available for any other in-app brand usage.
 struct LocalabsLogo: View {
     enum Layer {
         case full
