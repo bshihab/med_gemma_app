@@ -170,151 +170,31 @@ struct LocalabsLogo: View {
     /// PNGs for Icon Composer.
     var layer: Layer = .full
 
-    // Colors picked to match the PDF: a slightly cool, saturated
-    // blue gradient running TL → BR, with a darker shade for pins
-    // and traces.
-    private let chipGradient = LinearGradient(
-        colors: [
-            Color(red: 0.32, green: 0.60, blue: 1.00),
-            Color(red: 0.07, green: 0.36, blue: 0.92)
-        ],
-        startPoint: .topLeading,
-        endPoint: .bottomTrailing
-    )
-    private let pinColor = Color(red: 0.10, green: 0.38, blue: 0.92)
-    private let traceColor = Color.white.opacity(0.22)
-
     var body: some View {
-        let s = size
-        let cornerRadius = s * 0.22
-        let pinW = s * 0.045
-        let pinH = s * 0.08
-        let pinSpacing = s * 0.155      // gap between pin centers
-        // pinOuter = distance from logo origin to pin's CENTER along
-        // the perpendicular axis. The previous 0.45 multiplier left
-        // the pin's inner edge just barely overlapping the chip's
-        // straight edge, but at the rounded corners the chip's curve
-        // pulled away from y=±s/2 and a thin white sliver opened
-        // between pin and chip. 0.30 deepens the pin's overlap into
-        // the chip body so the chip covers the inner edge even at
-        // the corners.
-        let pinOuter = s * 0.5 + pinH * 0.30
-        let traceLen = s * 0.16
-        let traceInset = s * 0.5 - traceLen / 2
-        let traceThickness = pinW * 0.55
-        let heartSize = s * 0.42
-
+        // Both PNG assets are exported from Icon Composer at
+        // 1024×1024 with the same canvas alignment — the heart sits
+        // exactly where it should over the chip — so stacking them
+        // in a ZStack at matching frame sizes reproduces the full
+        // logo with zero positioning math. Image() with .resizable()
+        // is rendered as a GPU texture, so scaling it (for the
+        // splash's pulse and zoom) is a hardware texture-sample op
+        // rather than a vector re-rasterization — that's what makes
+        // the splash animation smooth at any scale.
         ZStack {
-            // Static chip + pins + traces — wrapped in their own
-            // ZStack and flattened with drawingGroup so the chip
-            // body never re-rasterizes during the splash animations.
-            // Only the heart (the sibling below) animates.
             if layer != .heartOnly {
-                chipFrame(
-                    pinSpacing: pinSpacing,
-                    pinW: pinW,
-                    pinH: pinH,
-                    pinOuter: pinOuter,
-                    cornerRadius: cornerRadius,
-                    s: s,
-                    traceLen: traceLen,
-                    traceInset: traceInset,
-                    traceThickness: traceThickness
-                )
-            }
-
-            if layer != .chipOnly {
-                Image(systemName: "heart.fill")
+                Image("LocalabsChip")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .foregroundStyle(.white)
-                    .frame(width: heartSize, height: heartSize)
-                    .offset(y: -heartSize * 0.04)
+                    .frame(width: size, height: size)
+            }
+            if layer != .chipOnly {
+                Image("LocalabsHeart")
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: size, height: size)
                     .scaleEffect(heartScale, anchor: .center)
             }
         }
-        // Logo bounds include the pins, so the splash centers the
-        // whole composition (chip + pins) rather than just the chip.
-        .frame(width: s + pinH * 2, height: s + pinH * 2)
-    }
-
-    /// Extracted chip-frame view (pins, chip body, traces). Lives in
-    /// its own function so the layer split above doesn't have to
-    /// inline the ZStack twice. .drawingGroup() flattens this whole
-    /// composition into a single Metal texture so per-frame splash
-    /// animations don't re-rasterize the 40+ shapes.
-    @ViewBuilder
-    private func chipFrame(
-        pinSpacing: CGFloat,
-        pinW: CGFloat,
-        pinH: CGFloat,
-        pinOuter: CGFloat,
-        cornerRadius: CGFloat,
-        s: CGFloat,
-        traceLen: CGFloat,
-        traceInset: CGFloat,
-        traceThickness: CGFloat
-    ) -> some View {
-        ZStack {
-                // Pins — 5 per side, drawn before the chip so the
-                // chip's rounded corner gently overlaps each pin's
-                // inner edge.
-                ForEach(-2...2, id: \.self) { i in
-                    let lateral = CGFloat(i) * pinSpacing
-                    // Top
-                    Rectangle()
-                        .fill(pinColor)
-                        .frame(width: pinW, height: pinH)
-                        .offset(x: lateral, y: -pinOuter)
-                    // Bottom
-                    Rectangle()
-                        .fill(pinColor)
-                        .frame(width: pinW, height: pinH)
-                        .offset(x: lateral, y: pinOuter)
-                    // Left (rotated 90°: width/height swap)
-                    Rectangle()
-                        .fill(pinColor)
-                        .frame(width: pinH, height: pinW)
-                        .offset(x: -pinOuter, y: lateral)
-                    // Right
-                    Rectangle()
-                        .fill(pinColor)
-                        .frame(width: pinH, height: pinW)
-                        .offset(x: pinOuter, y: lateral)
-                }
-
-                // Chip body
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(chipGradient)
-                    .frame(width: s, height: s)
-
-                // Trace strokes — thin lines feeding from each pin
-                // into the chip interior. Drawn ON TOP of the chip
-                // so they're visible against the blue gradient.
-                ForEach(-2...2, id: \.self) { i in
-                    let lateral = CGFloat(i) * pinSpacing
-                    // Top trace (vertical, just inside top edge)
-                    Rectangle()
-                        .fill(traceColor)
-                        .frame(width: traceThickness, height: traceLen)
-                        .offset(x: lateral, y: -traceInset)
-                    // Bottom trace
-                    Rectangle()
-                        .fill(traceColor)
-                        .frame(width: traceThickness, height: traceLen)
-                        .offset(x: lateral, y: traceInset)
-                    // Left trace (horizontal, just inside left edge)
-                    Rectangle()
-                        .fill(traceColor)
-                        .frame(width: traceLen, height: traceThickness)
-                        .offset(x: -traceInset, y: lateral)
-                    // Right trace
-                    Rectangle()
-                        .fill(traceColor)
-                        .frame(width: traceLen, height: traceThickness)
-                        .offset(x: traceInset, y: lateral)
-                }
-            }
-            .drawingGroup()
+        .frame(width: size, height: size)
     }
 }
