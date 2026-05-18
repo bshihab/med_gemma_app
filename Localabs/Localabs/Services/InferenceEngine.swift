@@ -346,6 +346,20 @@ final class InferenceEngine: ObservableObject {
             return StructuredReport(patientSummary: "No text was found in these pages. Please ensure the document is clearly visible and try again.")
         }
 
+        // ── Reject non-lab content BEFORE saving images or running inference ──
+        // The heuristic short-circuits anything that doesn't look like
+        // a lab report (random photos, screenshots of non-medical
+        // apps, etc.) so we don't (a) burn 30s of inference for nothing
+        // and (b) hand the model a context where it would fabricate
+        // findings from prior reports in RAG. ScanView watches the
+        // resulting marker and shows the "No health content detected"
+        // popup instead of routing into DashboardView.
+        if !Self.looksLikeLabReport(combinedText) {
+            analysisProgress = 0
+            processingStatus = ""
+            return Self.makeNonHealthRejectionReport(rawText: combinedText)
+        }
+
         // ── Save every page image ──
         processingStatus = "Saving scan…"
         let savedNames = images.compactMap { saveScannedImage($0) }
@@ -411,6 +425,17 @@ final class InferenceEngine: ObservableObject {
             analysisProgress = 0.20  // OCR is skipped for text-PDFs
             defer { isProcessing = false }
 
+            // Same non-health rejection gate as analyzeImages, applied
+            // here BEFORE we save page images. Catches PDFs of code,
+            // receipts, etc. that happen to have embedded text but
+            // nothing medical to analyze.
+            let combinedText = truncateForContext(combinePageTexts(pdfTextByPage))
+            if !Self.looksLikeLabReport(combinedText) {
+                analysisProgress = 0
+                processingStatus = ""
+                return Self.makeNonHealthRejectionReport(rawText: combinedText)
+            }
+
             processingStatus = "Saving PDF…"
             let savedNames = images.compactMap { saveScannedImage($0) }
             let firstPath = savedNames.first
@@ -421,7 +446,6 @@ final class InferenceEngine: ObservableObject {
             let healthMetrics = await HealthKitService.shared.getHealthMetrics()
             analysisProgress = 0.25
 
-            let combinedText = truncateForContext(combinePageTexts(pdfTextByPage))
             processingStatus = "Localabs is analyzing your results…"
             var report = await runInference(extractedText: combinedText, healthMetrics: healthMetrics, mode: .lab)
             report.imagePath = firstPath
@@ -666,23 +690,38 @@ final class InferenceEngine: ObservableObject {
         return unitHits >= 1 || rangeHits >= 1 || termHits >= 2
     }
 
+    /// Builds the canonical "we refused this scan" report. The first
+    /// line carries `nonHealthRejectionMarker` (invisible to the user
+    /// once ScanView swallows it), followed by a human-readable
+    /// explanation that's shown in the popup body. Centralizing this
+    /// here means every code path that detects a non-lab scan produces
+    /// an identically-shaped report, so the UI's marker check works
+    /// the same regardless of which entry point caught it.
+    static func makeNonHealthRejectionReport(rawText: String) -> StructuredReport {
+        let body = """
+        Localabs couldn't find any lab values, reference ranges, or medical findings in this scan. To prevent invented results, the analysis was stopped.
+
+        Try again with a printed lab result that shows test names, your values, and reference ranges (e.g. "180 mg/dL — normal range 100–200").
+        """
+        return StructuredReport(
+            patientSummary: "\(StructuredReport.nonHealthRejectionMarker)\n\(body)",
+            rawText: rawText
+        )
+    }
+
     /// `continueFromPartial`, when non-nil, primes the prompt with
     /// the partial model output the user paused mid-stream. The
     /// model picks up generating tokens *after* the partial instead
     /// of restarting from scratch — that's what makes Resume feel
     /// like continuation rather than a fresh re-run.
     private func runInference(extractedText: String, healthMetrics: HealthKitService.HealthMetrics, mode: AnalysisMode, continueFromPartial: String? = nil) async -> StructuredReport {
-        // Hard refuse on obviously-not-a-lab-report scans BEFORE we
-        // ever hit the LLM. Skipping inference avoids both the
-        // 30+-second wait and the hallucination risk of forcing the
-        // model to write lab sections with no lab data to anchor on.
-        // The Weekly mode legitimately runs without OCR content, so
-        // it bypasses this check.
+        // Belt-and-suspenders: analyzeImages / analyzePDF already
+        // gate the heuristic and bail before invoking runInference,
+        // but if anything ever calls runInference directly with a
+        // non-lab text (and we're in lab mode), produce the same
+        // rejection shape ScanView knows how to handle.
         if mode == .lab, !Self.looksLikeLabReport(extractedText) {
-            return StructuredReport(
-                patientSummary: "⚠️ This image doesn't look like a lab report.\n\nLocalabs couldn't find any lab values, reference ranges, or medical findings in the scanned image. To avoid invented results, the analysis was skipped.\n\n- Try scanning a printed lab result that shows test names, your values, and reference ranges (e.g. \"180 mg/dL\", \"normal range 100–200\").\n- Multi-page scans? Make sure each page actually contains the table of results.\n- If you DID scan a lab report and this message shows up, the OCR may have failed — try retaking with better lighting and the page flat.",
-                rawText: extractedText
-            )
+            return Self.makeNonHealthRejectionReport(rawText: extractedText)
         }
 
         let profile = UserProfile.load()

@@ -1,6 +1,13 @@
 import Foundation
 
 struct StructuredReport: Codable, Identifiable, Hashable {
+    /// Sentinel string used in `patientSummary` to flag reports that
+    /// were short-circuited because the scanned content didn't look
+    /// like a lab report at all. Surfaced to the UI via
+    /// `wasRejectedAsNonHealth` so ScanView can show an alert popup
+    /// instead of pushing into the (empty) DashboardView.
+    static let nonHealthRejectionMarker = "__LOCALABS_NON_HEALTH_REJECTED__"
+
     var id: UUID
     var timestamp: Date
     var patientSummary: String
@@ -14,6 +21,15 @@ struct StructuredReport: Codable, Identifiable, Hashable {
     /// photos). The first page's path stays in `imagePath` so existing
     /// saved reports decode unchanged.
     var additionalPagePaths: [String]?
+
+    /// True when the analysis pipeline refused this scan because it
+    /// didn't contain any lab values, units, or medical vocabulary.
+    /// Drives the "No health content detected" popup in ScanView.
+    /// Checked via a marker in `patientSummary` so we don't have to
+    /// change the Codable surface (older saved reports stay decodable).
+    var wasRejectedAsNonHealth: Bool {
+        patientSummary.contains(Self.nonHealthRejectionMarker)
+    }
 
     init(
         id: UUID = UUID(),

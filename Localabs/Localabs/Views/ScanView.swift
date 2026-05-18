@@ -12,6 +12,11 @@ struct ScanView: View {
     @State private var showPDFPicker = false
     @State private var navigateToDashboard = false
     @State private var showPermissionAlert = false
+    /// Drives the "No health content detected" alert. Set when the
+    /// analysis pipeline returns a `wasRejectedAsNonHealth` report;
+    /// dismissing the alert clears `report` so ScanView snaps back
+    /// to the idle upload view.
+    @State private var showNonHealthAlert = false
 
     var body: some View {
         NavigationStack {
@@ -40,10 +45,7 @@ struct ScanView: View {
                 PDFDocumentPicker { url in
                     Task {
                         let result = await engine.analyzePDF(at: url)
-                        report = result
-                        if !result.isIncomplete && !engine.isPaused {
-                            navigateToDashboard = true
-                        }
+                        handleAnalysisResult(result)
                     }
                 }
                 .ignoresSafeArea()
@@ -57,6 +59,18 @@ struct ScanView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Please enable camera access in Settings to scan lab reports.")
+            }
+            // "No health content detected" popup. Fires whenever
+            // analyzeImages / analyzePDF returns a rejection report
+            // (the heuristic refused to send something that doesn't
+            // look like a lab report to the model). Dismissing clears
+            // `report` so the view flips back to the upload buttons.
+            .alert("No health content detected", isPresented: $showNonHealthAlert) {
+                Button("OK", role: .cancel) {
+                    report = nil
+                }
+            } message: {
+                Text("Localabs couldn't find any lab values, reference ranges, or medical findings in this scan. To prevent invented results, the analysis was stopped.\n\nTry again with a printed lab report showing test names, your values, and reference ranges.")
             }
             .onChange(of: pickerItems) { _, newItems in
                 handlePickerItemsChange(newItems)
@@ -302,14 +316,7 @@ struct ScanView: View {
             pickerItems = []
             if !images.isEmpty {
                 let result = await engine.analyzeImages(images)
-                report = result
-                // Only push to Dashboard if the analysis actually
-                // finished. Incomplete / paused runs stay on ScanView
-                // so the user can resume in place; the duplicate
-                // pushed-dashboard was the whole problem we're fixing.
-                if !result.isIncomplete && !engine.isPaused {
-                    navigateToDashboard = true
-                }
+                handleAnalysisResult(result)
             }
         }
     }
@@ -320,11 +327,32 @@ struct ScanView: View {
         guard let image = newImage else { return }
         Task {
             let result = await engine.analyzeImages([image])
-            report = result
-            if !result.isIncomplete && !engine.isPaused {
-                navigateToDashboard = true
-            }
+            handleAnalysisResult(result)
             selectedImage = nil
+        }
+    }
+
+    /// Single routing point for every analysis result, regardless of
+    /// the entry path (PDF picker, photo picker, or camera). Three
+    /// outcomes:
+    ///   1. Rejection (non-health content) → show alert, stay on
+    ///      upload view, never persist anything.
+    ///   2. Incomplete (paused / interrupted) → stay on ScanView so
+    ///      the in-place Resume/Discard buttons can take over.
+    ///   3. Completed → push DashboardView with the new report.
+    private func handleAnalysisResult(_ result: StructuredReport) {
+        if result.wasRejectedAsNonHealth {
+            // Don't even keep the rejected report around — the alert
+            // is the only feedback the user needs, and leaving it in
+            // `report` would risk navigating to DashboardView on the
+            // next state change.
+            report = nil
+            showNonHealthAlert = true
+            return
+        }
+        report = result
+        if !result.isIncomplete && !engine.isPaused {
+            navigateToDashboard = true
         }
     }
 
