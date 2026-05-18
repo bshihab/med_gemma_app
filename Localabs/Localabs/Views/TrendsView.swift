@@ -319,7 +319,10 @@ struct TrendsView: View {
             guard let s = entry.1, s.hasData else { return nil }
             return (entry.0, s, HealthInsights.clinicalContext(for: entry.0))
         }
-        let insights = HealthInsights.computeInsights(from: withData, maxInsights: 3)
+        let profile = UserProfile.load()
+        let age = Int(profile.age)
+        let sex = HealthInsights.BiologicalSex.from(profile.biologicalSex)
+        let insights = HealthInsights.computeInsights(from: withData, age: age, sex: sex, maxInsights: 3)
         if !insights.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
@@ -427,14 +430,19 @@ struct TrendsView: View {
 
     private func metricCard(label: String, series: HealthKitService.MetricSeries, tint: Color) -> some View {
         let context = HealthInsights.clinicalContext(for: label)
-        // Status pills are only meaningful when we know the user's
-        // age + biological sex — population-norm bands shift with
-        // both, and showing a generic "Borderline" to someone whose
-        // demographics we don't know would be at best vague and at
-        // worst misleading. Force .unknown (which hides the pill)
-        // when those fields are missing from Profile.
+        // Status pills are personalized: HRV, VO₂ max, walking
+        // speed, sleep, and resting HR each use age- and sex-
+        // stratified cutoffs from peer-reviewed sources, so the
+        // same number reads differently for a 25-year-old vs. a
+        // 65-year-old. When the user hasn't supplied either field,
+        // we suppress the pill entirely (force .unknown) rather
+        // than fall back to a generic adult norm — population-
+        // average pills without that context were the original
+        // "vague at best, misleading at worst" problem.
         let profile = UserProfile.load()
-        let rawStatus = context?.interpret(series.average) ?? .unknown
+        let age = Int(profile.age)
+        let sex = HealthInsights.BiologicalSex.from(profile.biologicalSex)
+        let rawStatus = context?.interpret(series.average, age, sex) ?? .unknown
         let status: HealthInsights.Status = profile.hasDemographicsForStatusLabels ? rawStatus : .unknown
         let delta = deltaString(for: series)
         let isCumulative = HealthInsights.isCumulativeMetric(label)
@@ -772,11 +780,13 @@ struct MetricDetailView: View {
     private var headlineCard: some View {
         let context = HealthInsights.clinicalContext(for: label)
         // Match TrendsView.metricCard: status pill only renders when
-        // the user has supplied age + biological sex. Otherwise the
-        // population-norm interpretation isn't tailored enough to be
-        // useful and we suppress the label entirely.
+        // the user has supplied age + biological sex, and when it
+        // does, the underlying interpret call is given those values
+        // so the threshold is age/sex-bracketed instead of generic.
         let profile = UserProfile.load()
-        let rawStatus = context?.interpret(series.average) ?? .unknown
+        let age = Int(profile.age)
+        let sex = HealthInsights.BiologicalSex.from(profile.biologicalSex)
+        let rawStatus = context?.interpret(series.average, age, sex) ?? .unknown
         let status: HealthInsights.Status = profile.hasDemographicsForStatusLabels ? rawStatus : .unknown
         return VStack(alignment: .leading, spacing: 14) {
             // "AVERAGE" pill above the value, Apple Health style.
@@ -1034,14 +1044,23 @@ struct MetricDetailView: View {
     // MARK: Clinical context
 
     private func contextCard(_ context: HealthInsights.ClinicalContext) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        // typicalRangeLabel is now demographics-aware: HRV, VO₂ max,
+        // walking speed, sleep, and resting HR each return a band
+        // appropriate to the user's age/sex bracket (e.g. HRV
+        // shows "30–55 ms" for a 45-year-old and "50–80 ms" for a
+        // 25-year-old). Without profile demographics it falls back
+        // to the adult-typical band.
+        let profile = UserProfile.load()
+        let age = Int(profile.age)
+        let sex = HealthInsights.BiologicalSex.from(profile.biologicalSex)
+        return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text("TYPICAL RANGE")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .tracking(1.2)
                 Spacer()
-                Text(context.typicalRangeLabel)
+                Text(context.typicalRangeLabel(age, sex))
                     .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
             }

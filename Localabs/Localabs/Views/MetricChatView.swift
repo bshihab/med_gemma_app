@@ -273,10 +273,19 @@ struct MetricChatView: View {
         // Pre-compute the descriptive bits the model needs about
         // this metric — pulling from the same HealthInsights source
         // the detail sheet renders so the chat and the sheet can't
-        // disagree on the numbers.
+        // disagree on the numbers. Status + typical-range use the
+        // user's age/sex when available so the model is reasoning
+        // about the same demographics-aware band the user sees on
+        // their card.
         let context = HealthInsights.clinicalContext(for: label)
-        let status = context?.interpret(series.average) ?? .unknown
+        let profile = UserProfile.load()
+        let age = Int(profile.age)
+        let sex = HealthInsights.BiologicalSex.from(profile.biologicalSex)
+        let hasDemographics = profile.hasDemographicsForStatusLabels
+        let rawStatus = context?.interpret(series.average, age, sex) ?? .unknown
+        let status: HealthInsights.Status = hasDemographics ? rawStatus : .unknown
         let statusLabel = status == .unknown ? nil : status.label
+        let typicalRange = context.map { $0.typicalRangeLabel(age, sex) }
         let deltaText = formattedDelta
 
         Task {
@@ -288,7 +297,7 @@ struct MetricChatView: View {
                 metricUnit: series.unit,
                 metricRangeDays: rangeDays,
                 metricStatusLabel: statusLabel,
-                metricTypicalRange: context?.typicalRangeLabel,
+                metricTypicalRange: typicalRange,
                 metricExplanation: context?.explanation,
                 metricDelta: deltaText,
                 otherHealthMetrics: siblingMetrics
