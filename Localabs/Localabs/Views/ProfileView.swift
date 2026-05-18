@@ -229,18 +229,26 @@ struct ProfileView: View {
                 if isRequestingHealth {
                     ProgressView().scaleEffect(0.8)
                 } else if hasRequestedHealth {
-                    // Connected state — green check whether or not
-                    // there are readings yet. The detailed checklist
-                    // below shows which types have data and which
-                    // are dark, so the user can tell at a glance
-                    // what's actually flowing.
+                    // Pill reflects whether data is actually FLOWING,
+                    // not just whether the auth sheet was completed.
+                    // iOS hides actual grant status for privacy, so
+                    // the old "Connected ✓" stayed green even when
+                    // the user had denied — misleading. Now:
+                    //   - data found in last 30 days → green "Active"
+                    //   - permission accepted, no readings yet/ever →
+                    //     orange "No data" with a hint to enable types
+                    //     in the Health app.
+                    // The detailed checklist below still itemizes
+                    // which types are flowing; this pill is the
+                    // at-a-glance summary.
+                    let flowing = (healthMetrics?.isEmpty == false)
                     HStack(spacing: 4) {
-                        Image(systemName: "checkmark.circle.fill")
+                        Image(systemName: flowing ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
                             .font(.system(size: 18))
-                            .foregroundStyle(.green)
-                        Text("Connected")
+                            .foregroundStyle(flowing ? .green : .orange)
+                        Text(flowing ? "Active" : "No data")
                             .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(flowing ? .green : .orange)
                     }
                 }
             }

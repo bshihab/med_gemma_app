@@ -840,6 +840,8 @@ final class InferenceEngine: ObservableObject {
         - Use *italics* sparingly, only for tone or emphasis.
         - Add emoji rarely and only when it genuinely aids comprehension (✅ normal, ⚠️ worth discussing, 💊 medications, 🥗 dietary). Max 1–2 per section. Never decorative.
 
+        Section-budgeting: keep each of the 5 sections to roughly 3–5 bullets, ~80–120 words. Do NOT spend most of your output on the first 1–2 sections and rush the rest. MEDICATION NOTES in particular: if the report mentions medications, list each one with timing/dose; if the report genuinely has no medication info, say so in a single short bullet — do not pad. Reserve enough budget that every section gets equal treatment.
+
         Do NOT wrap the section headers themselves in asterisks. Keep them as plain text on their own line so they parse cleanly.
         <end_of_turn>
         <start_of_turn>model
@@ -870,14 +872,17 @@ final class InferenceEngine: ObservableObject {
             collected = ""
             streamingText = ""
         }
-        // Bumped from 1000 to 1500 so multi-page scans (3+ pages
-        // produce ~1100-1400 tokens of structured output) finish
-        // every section instead of getting truncated mid-MEDICATION
-        // NOTES. The model still stops the moment it emits the
-        // end-of-turn marker, so single-page reports don't pay any
-        // extra latency for the bigger ceiling — only multi-page runs
-        // that actually need the headroom.
-        let maxTokens = 1500
+        // Output ceiling. Sized so MEDICATION NOTES gets adequate
+        // room even on dense multi-page reports — the model tended
+        // to over-spend tokens on PATIENT SUMMARY / DIETARY ADVICE
+        // and arrive at MEDICATION NOTES with only a sentence or
+        // two of budget left, ending sections with "No medications"
+        // even when the report did list them. 2000 leaves ~300-400
+        // tokens of safety inside n_ctx=4096 after a 7000-char OCR
+        // (~1750 tokens) plus the system header (~250 tokens).
+        // Model still terminates at end-of-turn, so light reports
+        // don't pay any latency for the bigger ceiling.
+        let maxTokens = 2000
         var tokenCount = 0
         // Surface prompt size in the Xcode console — useful for diagnosing
         // tokenize-overflow / slow-decode complaints. Approximate token
