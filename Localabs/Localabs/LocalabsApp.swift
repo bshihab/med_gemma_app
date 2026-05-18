@@ -42,6 +42,24 @@ struct LocalabsApp: App {
 final class LocalabsAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        // Cold-start the keyboard subsystem during launch so the
+        // first real text-field tap doesn't pay the ~10s
+        // "Result accumulator timeout / Reporter disconnected"
+        // delay we were seeing in the chat input. iOS spins up the
+        // RemoteTextInput (RTI) daemon lazily on first
+        // becomeFirstResponder — by doing that on a throwaway
+        // off-screen field at launch, the daemon is already warm by
+        // the time the user actually opens a chat.
+        DispatchQueue.main.async {
+            Self.prewarmKeyboard()
+        }
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         handleEventsForBackgroundURLSession identifier: String,
         completionHandler: @escaping () -> Void
     ) {
@@ -53,5 +71,27 @@ final class LocalabsAppDelegate: NSObject, UIApplicationDelegate {
         // pending events to its delegate — without this, iOS would have
         // a session id with no live delegate to deliver to.
         ModelDownloader.shared.ensureBackgroundSessionReady()
+    }
+
+    /// Triggers the iOS keyboard daemon (UIKeyboard / RTI) by briefly
+    /// making a hidden, off-screen `UITextField` first responder.
+    /// The field is removed immediately after — it never appears
+    /// visually — but the system has now done the expensive one-time
+    /// keyboard bring-up work, so the first real text-field focus is
+    /// instant instead of taking ~10s on launch.
+    private static func prewarmKeyboard() {
+        guard let scene = UIApplication.shared.connectedScenes
+                .first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene,
+              let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        else { return }
+
+        let field = UITextField(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+        field.isHidden = true
+        window.addSubview(field)
+        _ = field.becomeFirstResponder()
+        DispatchQueue.main.async {
+            field.resignFirstResponder()
+            field.removeFromSuperview()
+        }
     }
 }

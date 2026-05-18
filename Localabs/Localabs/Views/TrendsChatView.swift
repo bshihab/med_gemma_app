@@ -56,23 +56,6 @@ struct TrendsChatView: View {
                                 messageRow(message)
                                     .id(message.id)
                             }
-
-                            // iMessage-style typing indicator only while we're
-                            // still waiting on the very first token. Once
-                            // tokens start streaming, the AI bubble itself
-                            // grows in place and this indicator goes away.
-                            if isThinking {
-                                HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: "sparkle")
-                                        .font(.system(size: 20))
-                                        .foregroundStyle(.blue)
-                                        .padding(.top, 6)
-                                    TypingDots()
-                                    Spacer(minLength: 0)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal)
-                            }
                         }
                         .padding(.bottom, 16)
                     }
@@ -163,7 +146,30 @@ struct TrendsChatView: View {
 
     // MARK: - Messages
 
+    @ViewBuilder
     private func messageRow(_ message: ChatMessage) -> some View {
+        // Empty streaming AI placeholder = "waiting for the first
+        // token." Render TypingDots inline instead of an empty glass
+        // bubble — same pattern as FollowUpChatView so the user sees
+        // the iMessage-style indicator in the same spot the bubble
+        // will appear once tokens arrive.
+        if message.role == .ai && message.isStreaming && message.content.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.blue)
+                    .padding(.top, 6)
+                TypingDots()
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal)
+        } else {
+            chatBubble(for: message)
+        }
+    }
+
+    private func chatBubble(for message: ChatMessage) -> some View {
         HStack(alignment: .top, spacing: 10) {
             if message.role == .ai {
                 Image(systemName: "sparkle")
