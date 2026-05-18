@@ -37,11 +37,22 @@ class VisionOCRService {
         /// row is reordered to position 0 (with the divider directly under
         /// it) and the remaining rows preserve their original order. Gemma
         /// reads this format natively and reasons about cells positionally.
+        ///
+        /// Cells that carry internal newlines (multi-line cell content,
+        /// e.g. a "Therapeutic Range" column with three bullet lines)
+        /// get those newlines collapsed to `; ` so each markdown table
+        /// row stays on a single line — a raw `\n` inside a cell would
+        /// terminate the row in standard markdown and leave the model
+        /// staring at a mis-shaped table.
         func asMarkdown() -> String {
             guard !rows.isEmpty else { return "" }
             let cols = columnCount
+            func sanitize(_ cell: String) -> String {
+                cell.replacingOccurrences(of: "\n", with: "; ")
+                    .replacingOccurrences(of: "|", with: "\\|")
+            }
             func pad(_ row: [String]) -> [String] {
-                (0..<cols).map { i in i < row.count ? row[i] : "" }
+                (0..<cols).map { i in i < row.count ? sanitize(row[i]) : "" }
             }
             var lines: [String] = []
             // Header first (reordered if it wasn't already on row 0).
@@ -106,19 +117,21 @@ class VisionOCRService {
     ///      positions across all rows (tolerance = 4% of normalized width).
     ///   3. Classify each row as tabular vs. paragraph. A row is tabular
     ///      iff its blocks span ≥2 distinct columns AND no single block in
-    ///      the row exceeds 60 chars (long blocks are sentences, not cells).
-    ///   4. Find the longest contiguous run of tabular rows — that's the
-    ///      table. Everything outside that run becomes paragraph text,
-    ///      preserved in document order (above-table prose then
-    ///      below-table prose).
+    ///      the row exceeds 90 chars (long blocks are sentences, not cells).
+    ///   4. Take the span from the first tabular row to the last tabular
+    ///      row as the table region. Non-tabular rows INSIDE that span
+    ///      (between two tabular rows) are treated as multi-line cell
+    ///      continuations — their blocks get folded into the matching
+    ///      columns of the preceding tabular row. This is what lets us
+    ///      handle lab tables where the "Therapeutic Range" column stacks
+    ///      3-4 bullet lines per test row.
     ///   5. Validate the candidate table: need ≥2 rows, ≥2 columns, and
     ///      ≥50% of expected cells filled. If it fails any check, drop the
     ///      table and return everything as plain text.
     ///
-    /// The contiguous-run requirement matters because lab reports often
-    /// have a section heading + table + footnote layout. We want to
-    /// extract the table portion cleanly without folding the heading into
-    /// row 0 or the footnote into the last row.
+    /// Rows BEFORE the first tabular row (e.g. a "LIPID PANEL PROFILE"
+    /// heading) and AFTER the last tabular row (footnotes) become
+    /// `extraText` rather than being folded into the table.
     static func breakdown(of blocks: [RecognizedBlock]) -> LassoBreakdown {
         guard !blocks.isEmpty else {
             return LassoBreakdown(table: nil, extraText: "")
@@ -164,70 +177,80 @@ class VisionOCRService {
         // Tabular = spans ≥2 columns AND no single block is sentence-length.
         // The length check kills the false-positive where a multi-word
         // paragraph row hits multiple columns just because Vision split
-        // the words across different X positions.
+        // the words across different X positions. Bumped to 90 chars (was
+        // 60) so longer cell content like "Numeric calculation requested"
+        // descriptions or wrapped flag text doesn't disqualify a row.
         let rowIsTabular: [Bool] = rows.map { row in
             var hitColumns = Set<Int>()
             var maxBlockLength = 0
             for block in row {
-                let nearest = columnEdges.enumerated().min { a, b in
-                    abs(a.element - block.boundingBox.minX)
-                        < abs(b.element - block.boundingBox.minX)
-                }!
-                hitColumns.insert(nearest.offset)
+                hitColumns.insert(nearestColumnIndex(for: block.boundingBox.minX, edges: columnEdges))
                 maxBlockLength = max(maxBlockLength, block.text.count)
             }
-            return hitColumns.count >= 2 && maxBlockLength <= 60
+            return hitColumns.count >= 2 && maxBlockLength <= 90
         }
 
-        // ── Step 4: longest contiguous tabular run ──
-        var bestStart = 0
-        var bestLength = 0
-        var runStart = 0
-        for (i, isTabular) in rowIsTabular.enumerated() {
-            if isTabular {
-                if i == 0 || !rowIsTabular[i - 1] { runStart = i }
-                let runLength = i - runStart + 1
-                if runLength > bestLength {
-                    bestStart = runStart
-                    bestLength = runLength
+        // ── Step 4: table range = first tabular row through last tabular row ──
+        // We use the outer span (not the longest contiguous run) so that
+        // single-block "orphan" rows between tabular rows can be folded
+        // back in as continuation lines of multi-line cells. The longest-
+        // contiguous-run approach was dropping every test row in a lab
+        // table whose Therapeutic Range column had multiple bullets,
+        // because each bullet became its own non-tabular row.
+        let tabularIndices = rowIsTabular.enumerated().compactMap { $1 ? $0 : nil }
+        guard let firstTabular = tabularIndices.first,
+              let lastTabular = tabularIndices.last,
+              tabularIndices.count >= 2,
+              columnEdges.count >= 2
+        else {
+            return LassoBreakdown(table: nil, extraText: joinedFromRows(rows))
+        }
+        let tableRange = firstTabular...lastTabular
+
+        // ── Step 5: build the grid, folding orphan rows into the prior tabular row ──
+        var grid: [[String]] = []
+        var currentCells: [String]? = nil
+        for i in tableRange {
+            let row = rows[i]
+            if rowIsTabular[i] {
+                // Flush the prior tabular row (with any continuations
+                // that got folded into it) before starting a new one.
+                if let prev = currentCells { grid.append(prev) }
+                var cells = [String](repeating: "", count: columnEdges.count)
+                let leftSorted = row.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
+                for block in leftSorted {
+                    let col = nearestColumnIndex(for: block.boundingBox.minX, edges: columnEdges)
+                    cells[col] = cells[col].isEmpty
+                        ? block.text
+                        : cells[col] + " " + block.text
+                }
+                currentCells = cells
+            } else if currentCells != nil {
+                // Continuation row: append each block to the matching
+                // column of the preceding tabular row, newline-separated.
+                // Newlines (rather than spaces) preserve the bullet-list
+                // structure of multi-line cells in the markdown export.
+                for block in row {
+                    let col = nearestColumnIndex(for: block.boundingBox.minX, edges: columnEdges)
+                    currentCells![col] = currentCells![col].isEmpty
+                        ? block.text
+                        : currentCells![col] + "\n" + block.text
                 }
             }
         }
-        let tableRange = bestStart..<(bestStart + bestLength)
-
-        // Need at least 2 tabular rows AND 2 columns to have a table at all.
-        guard bestLength >= 2, columnEdges.count >= 2 else {
-            return LassoBreakdown(table: nil, extraText: joinedFromRows(rows))
-        }
-
-        // ── Step 5: build the grid from the tabular run only ──
-        var grid: [[String]] = []
-        for row in rows[tableRange] {
-            var cells = [String](repeating: "", count: columnEdges.count)
-            let leftSorted = row.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
-            for block in leftSorted {
-                let nearest = columnEdges.enumerated().min { a, b in
-                    abs(a.element - block.boundingBox.minX)
-                        < abs(b.element - block.boundingBox.minX)
-                }!
-                let col = nearest.offset
-                cells[col] = cells[col].isEmpty
-                    ? block.text
-                    : cells[col] + " " + block.text
-            }
-            grid.append(cells)
-        }
+        if let last = currentCells { grid.append(last) }
 
         let totalExpected = grid.count * columnEdges.count
         let filledCount = grid.flatMap { $0 }.filter { !$0.isEmpty }.count
-        let fillRate = Double(filledCount) / Double(totalExpected)
-        guard fillRate >= 0.5 else {
+        let fillRate = totalExpected > 0 ? Double(filledCount) / Double(totalExpected) : 0
+        guard grid.count >= 2, fillRate >= 0.5 else {
             return LassoBreakdown(table: nil, extraText: joinedFromRows(rows))
         }
 
-        // ── Step 6: paragraph rows outside the run become extraText ──
-        // Document order is preserved: above-table rows first, then
-        // below-table rows. Each row's blocks are joined left-to-right.
+        // ── Step 6: paragraph rows outside the range become extraText ──
+        // Only rows above the first tabular row and below the last
+        // tabular row get split out — anything inside got folded into
+        // the grid already.
         var extraLines: [String] = []
         for (i, row) in rows.enumerated() where !tableRange.contains(i) {
             let line = row.sorted { $0.boundingBox.minX < $1.boundingBox.minX }
@@ -240,6 +263,23 @@ class VisionOCRService {
             table: RecognizedTable(rows: grid, headerRowIndex: detectHeaderRow(grid)),
             extraText: extraLines.joined(separator: "\n")
         )
+    }
+
+    /// Returns the index of the column edge nearest to `x`. Pulled out
+    /// of the breakdown algorithm as a helper because we now need to do
+    /// the same lookup in two phases (row classification + grid build +
+    /// orphan-row continuation fold).
+    private static func nearestColumnIndex(for x: CGFloat, edges: [CGFloat]) -> Int {
+        var bestIndex = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for (i, edge) in edges.enumerated() {
+            let d = abs(edge - x)
+            if d < bestDistance {
+                bestDistance = d
+                bestIndex = i
+            }
+        }
+        return bestIndex
     }
 
     /// Convenience wrapper for callers that only want the table portion.
