@@ -99,21 +99,29 @@ final class InferenceEngine: ObservableObject {
     }
 
     /// Background-observer entry point. Same effect as `pauseInference()`
-    /// — but guards against stale notifications. iOS posts
-    /// `didEnterBackgroundNotification` for brief lifecycle blips
-    /// (notification banner pull-down, FaceID prompt, lock-screen peek),
-    /// and the AsyncSequence reading those notifications can deliver
-    /// one *after* we've already returned to foreground. Tapping Resume
-    /// would then immediately re-pause, leaving the user in a loop
-    /// where the Resume button "flickers away and comes back."
+    /// — but only fires when the app is GENUINELY in the background.
+    /// Three reasons for the guard:
+    ///   1. iOS delivers `didEnterBackgroundNotification` for brief
+    ///      lifecycle blips (notification banner pull-down, FaceID
+    ///      prompt, lock-screen peek), and the AsyncSequence reading
+    ///      those can deliver one *after* we've already returned to
+    ///      foreground.
+    ///   2. The `.inactive` state (incoming call, Control Center
+    ///      pulled down, system alert briefly visible) is not real
+    ///      backgrounding — the Metal command buffer is still safe,
+    ///      so there's no `ggml_abort` risk. Pausing for these blips
+    ///      kept interrupting normal analyses around 25% (during the
+    ///      Apple Health metrics await) for no good reason.
+    ///   3. Tapping Resume after a wrongful auto-pause would
+    ///      immediately re-pause from another queued blip, creating
+    ///      the "Resume button flickers and comes back" loop.
     ///
-    /// Check `UIApplication.shared.applicationState` at the moment of
-    /// handling — that's the authoritative *current* state, not the
-    /// queued notification's. If we're already back to .active, the
-    /// notification is stale and we ignore it.
+    /// `applicationState == .background` is the strictest, most
+    /// honest check: we only pause when iOS has actually parked us in
+    /// the background and the GPU state really is at risk.
     private func pauseFromBackgroundIfActuallyBackgrounded() {
         guard isProcessing else { return }
-        guard UIApplication.shared.applicationState != .active else { return }
+        guard UIApplication.shared.applicationState == .background else { return }
         cancelInference()
         isPaused = true
     }
