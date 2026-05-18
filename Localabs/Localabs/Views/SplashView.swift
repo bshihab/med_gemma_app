@@ -73,7 +73,16 @@ struct SplashView: View {
 
     private var chipOverlay: some View {
         ZStack {
-            Color.white
+            // System-background instead of hard-coded white so the
+            // splash matches the active color scheme: white in light
+            // mode, near-black in dark mode. The heart-shaped hole
+            // cut into this overlay reveals ContentView underneath,
+            // which uses the same `.systemBackground` — so the
+            // transition from splash → app is seamless in both
+            // appearances. The heart fill stays white via its own
+            // `.foregroundStyle(.white)` so the brand mark reads
+            // light-on-dark in dark mode, matching the user's spec.
+            Color(uiColor: .systemBackground)
                 .ignoresSafeArea()
 
             Image("LocalabsChip")
