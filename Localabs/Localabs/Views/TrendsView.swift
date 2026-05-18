@@ -39,12 +39,17 @@ struct TrendsView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
+                // The "Health Trends" header used to be a Text view
+                // inside this VStack with a manually-set font. That
+                // bypassed the system's large-to-inline title
+                // behavior, so when the user scrolled, the title
+                // just disappeared off the top instead of collapsing
+                // into a centered inline title with the blur-behind-
+                // the-notch effect the other tabs (History, Profile)
+                // get for free. Switched to .navigationTitle +
+                // .navigationBarTitleDisplayMode(.large) — the
+                // system handles the shrink + blur automatically.
                 VStack(alignment: .leading, spacing: 22) {
-                    Text("Health Trends")
-                        .font(.system(size: 34, weight: .bold))
-                        .padding(.horizontal)
-                        .padding(.top, 8)
-
                     if !hasRequestedHealth {
                         notConnectedCard
                             .padding(.horizontal)
@@ -70,11 +75,13 @@ struct TrendsView: View {
                         }
                     }
                 }
+                .padding(.top, 8)
                 .padding(.bottom, 100)
             }
             .scrollContentBackground(.hidden)
             .background(.background)
-            .navigationTitle("")
+            .navigationTitle("Health Trends")
+            .navigationBarTitleDisplayMode(.large)
             .task(id: rangeDays) {
                 // Pull the auth flag fresh every time the view appears
                 // or the range changes — Profile may have flipped it
