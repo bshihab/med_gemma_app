@@ -376,6 +376,22 @@ final class InferenceEngine: ObservableObject {
         report.imagePath = firstPath
         report.additionalPagePaths = extraPaths
 
+        // Mid-stream rejection: the model started generating but
+        // realized this scan has no analyzable lab content. Clean up
+        // the page images we'd already saved to disk (the heuristic
+        // had passed, so we'd committed to saving) and return a
+        // pageless rejection report — ScanView will show the alert
+        // popup. We don't persist this to history and don't park it
+        // in pendingResumeReport, since there's nothing to resume.
+        if report.wasRejectedAsNonHealth {
+            Self.deleteSavedScans(named: savedNames)
+            report.imagePath = nil
+            report.additionalPagePaths = nil
+            analysisProgress = 0
+            processingStatus = ""
+            return report
+        }
+
         // Only persist if the run actually completed. A user-paused
         // run stays in memory via pendingResumeReport so Resume can
         // pick it up — but Discard then leaves no trace in History.
@@ -450,6 +466,19 @@ final class InferenceEngine: ObservableObject {
             var report = await runInference(extractedText: combinedText, healthMetrics: healthMetrics, mode: .lab)
             report.imagePath = firstPath
             report.additionalPagePaths = extraPaths
+
+            // Mid-stream rejection cleanup (mirror of analyzeImages):
+            // ditch the saved PDF page images and don't persist /
+            // park the rejection report.
+            if report.wasRejectedAsNonHealth {
+                Self.deleteSavedScans(named: savedNames)
+                report.imagePath = nil
+                report.additionalPagePaths = nil
+                analysisProgress = 0
+                processingStatus = ""
+                return report
+            }
+
             if !isInferenceCancelled {
                 LocalStorageService.shared.saveReport(report)
             }
@@ -512,6 +541,19 @@ final class InferenceEngine: ObservableObject {
         return nonEmpty
             .map { "--- Page \($0.index + 1) ---\n\($0.text)" }
             .joined(separator: "\n\n")
+    }
+
+    /// Removes a set of page images we'd already committed to disk
+    /// during analyzeImages / analyzePDF before the mid-stream
+    /// refusal kicked in. Without this, every false-positive heuristic
+    /// pass that the model then rejects would leave orphan JPEGs in
+    /// `Documents/scans/` that nothing references.
+    static func deleteSavedScans(named filenames: [String]) {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let scansDir = docs.appendingPathComponent("scans")
+        for name in filenames {
+            try? FileManager.default.removeItem(at: scansDir.appendingPathComponent(name))
+        }
     }
 
     private func saveScannedImage(_ image: UIImage) -> String? {
@@ -690,6 +732,13 @@ final class InferenceEngine: ObservableObject {
         return unitHits >= 1 || rangeHits >= 1 || termHits >= 2
     }
 
+    /// Exact phrase the analysis prompt instructs the model to emit
+    /// when the OCR text doesn't actually contain analyzable lab
+    /// content. Defined here so the prompt and the stream-watcher
+    /// reference the SAME string — drift between the two would mean
+    /// the watcher never fires, defeating the early-stop.
+    static let midStreamRefusalSnippet = "doesn't appear to contain lab report content"
+
     /// Builds the canonical "we refused this scan" report. The first
     /// line carries `nonHealthRejectionMarker` (invisible to the user
     /// once ScanView swallows it), followed by a human-readable
@@ -742,7 +791,7 @@ final class InferenceEngine: ObservableObject {
 
             CRITICAL RULES BEFORE YOU ANSWER:
             - Base your analysis ONLY on values that appear in the OCR text below. You have NO access to the user's prior lab reports — do not mention or imply any prior findings, do not say things like "consistent with your earlier panel," and do not carry numbers or diagnoses from anywhere else. If a fact isn't in the OCR text, it doesn't exist for this analysis.
-            - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your PATIENT SUMMARY must say: "⚠️ This image doesn't appear to contain lab report content I can analyze. Please retake with a printed lab result." Then leave the other 4 sections empty. Do NOT invent values.
+            - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your VERY FIRST line of PATIENT SUMMARY must be exactly: "⚠️ This image \(Self.midStreamRefusalSnippet) I can analyze. Please retake with a printed lab result." Then STOP — do not write anything else, do not fill the other sections. The app watches for that exact phrase and will halt generation when it sees it.
             - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable. Never paper over unreadable values with plausible-sounding text.
             """
 
@@ -835,6 +884,24 @@ final class InferenceEngine: ObservableObject {
             collected += piece
             streamingText = collected
             tokenCount += 1
+
+            // Early-stop: the heuristic passed (or wouldn't have run)
+            // and we started generating, but the model has decided it
+            // can't actually analyze this scan. Bail before it burns
+            // another 25s filling sections with hedged guesses.
+            // Window guard: only check during the first PATIENT
+            // SUMMARY phase. After ~120 tokens the model is well into
+            // a real analysis and the phrase wouldn't legitimately
+            // appear, so we stop wasting CPU on the contains() check.
+            if mode == .lab,
+               tokenCount < 120,
+               collected.contains(Self.midStreamRefusalSnippet) {
+                streamingText = ""
+                analysisProgress = 0
+                processingStatus = ""
+                return Self.makeNonHealthRejectionReport(rawText: extractedText)
+            }
+
             // Cap at 0.95 so the bar doesn't visibly hit 100% before save
             // completes — leaves the final bump for the post-loop write.
             // Also clamp with max() against the current progress so a
