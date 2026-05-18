@@ -855,7 +855,13 @@ final class InferenceEngine: ObservableObject {
         Lab Report OCR Text:
         "\(extractedText)"
 
-        Provide a report with these 5 sections, each starting with the numbered header on its own line:
+        BEFORE the 5 sections, emit exactly one line containing a short title for this specific report, in this format:
+        [TITLE: "<3 to 6 words>"]
+        - The title should describe what kind of lab report this is — e.g. "Lipid Panel Results", "Complete Blood Count", "Vitamin D Test", "Comprehensive Metabolic Panel", "Q2 2025 Cholesterol Check".
+        - Do NOT include the user's name, date, or generic phrases like "Lab Report" alone.
+        - The app strips this line before displaying; the user sees the title only in the History list and at the top of the dashboard. There must be EXACTLY one `[TITLE: …]` and nothing else on that line.
+
+        Then provide the 5 sections, each starting with the numbered header on its own line:
 
         1. PATIENT SUMMARY
         2. QUESTIONS FOR YOUR DOCTOR
