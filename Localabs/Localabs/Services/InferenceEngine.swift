@@ -1001,6 +1001,14 @@ final class InferenceEngine: ObservableObject {
         - Add an emoji only when it genuinely aids comprehension (✅ normal, ⚠️ worth discussing, 💊 medications). Max 1–2 per reply.
 
         Keep prose answers to 2–4 sentences. Use simple language. If the highlighted text contains a medical term, define it. If it's a lab value, explain whether it's normal and what it means.
+
+        PROFILE-INFO SIGNALS (advanced):
+        If during your answer you realize Localabs would give a more accurate answer if it knew a specific personal-health fact about the user that's NOT already in the User's medical context above (e.g. a medication, condition, family history item, smoking/alcohol status, age, biological sex, or blood type), you may emit ONE structured signal anywhere in your reply:
+        `[PROFILE_ADD: <field> = "<value>"]`
+        - Allowed <field> values: medications, conditions, family_history, smoking, alcohol, age, biological_sex, blood_type.
+        - <value> must be a short factual phrase the user actually stated or strongly implied (max 60 chars).
+        - The app strips this signal from the displayed message and shows the user a banner asking whether to add it — you are NOT confirming a write, you are *suggesting* one. Never invent facts the user did not state.
+        - Use this AT MOST ONCE per reply, only when it would genuinely improve future answers. If everything you need is already in the user's context, do not emit a signal.
         """
 
         var prompt = ""
@@ -1070,6 +1078,13 @@ final class InferenceEngine: ObservableObject {
         - Flag anything that warrants doctor follow-up explicitly with a ⚠️.
         - Format with **bold** for medical terms / metric values / numbers, *italics* sparingly, bullet points for short lists, and Markdown tables only when comparing 3+ values across categories.
         - Keep prose answers to 3–6 sentences unless the user explicitly asks for more depth.
+
+        PROFILE-INFO SIGNALS (advanced):
+        If your answer would meaningfully improve with a piece of personal-health info that's NOT in the user's profile above (a medication, condition, family history item, smoking/alcohol status, age, biological sex, or blood type) AND the user has implied or stated it, you may emit ONE signal anywhere in your reply:
+        `[PROFILE_ADD: <field> = "<value>"]`
+        - Allowed <field>: medications, conditions, family_history, smoking, alcohol, age, biological_sex, blood_type.
+        - The app strips this signal and surfaces an "Add to profile?" banner to the user — the write only happens if they tap Add.
+        - Use AT MOST ONCE per reply. Do not invent facts the user has not stated.
         """
 
         var prompt = ""
@@ -1178,6 +1193,11 @@ final class InferenceEngine: ObservableObject {
         - Flag anything that warrants doctor follow-up with ⚠️.
         - Format with **bold** for numbers / medical terms, bullet points for short lists.
         - Keep prose answers to 2–5 sentences unless the user asks for more depth.
+
+        PROFILE-INFO SIGNALS (advanced):
+        If interpreting this metric would benefit from a piece of personal-health info the profile doesn't have (medication, condition, family history, smoking/alcohol, age, biological_sex, blood_type) AND the user has stated or strongly implied it, emit ONE signal anywhere in your reply:
+        `[PROFILE_ADD: <field> = "<value>"]`
+        The app strips this signal and asks the user to confirm. Use AT MOST ONCE. Do not invent facts.
         """
 
         var prompt = ""

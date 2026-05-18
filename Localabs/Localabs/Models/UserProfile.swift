@@ -54,6 +54,63 @@ struct UserProfile: Codable {
             && !biologicalSex.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
+    /// Applies a chat-derived suggestion to the matching profile
+    /// field. Multi-line fields (medications, conditions, family
+    /// history) get a newline-separated append so the user can see
+    /// the accumulated set in their profile; single-value fields
+    /// (age, blood type, biological sex, smoking, alcohol) overwrite
+    /// only when blank — we never replace a value the user has
+    /// already filled in manually. Returns true when the profile
+    /// actually changed (so callers can show "✓ Added" feedback only
+    /// for real writes, not duplicates).
+    mutating func apply(_ suggestion: ProfileSuggestion) -> Bool {
+        let value = suggestion.value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return false }
+
+        switch suggestion.field {
+        case .medications:
+            return appendUnique(value: value, to: \.medications)
+        case .medicalConditions:
+            return appendUnique(value: value, to: \.medicalConditions)
+        case .familyHistory:
+            return appendUnique(value: value, to: \.familyHistory)
+        case .smoking:
+            return setIfEmpty(value: value, on: \.smoking)
+        case .alcohol:
+            return setIfEmpty(value: value, on: \.alcohol)
+        case .bloodType:
+            return setIfEmpty(value: value, on: \.bloodType)
+        case .age:
+            return setIfEmpty(value: value, on: \.age)
+        case .biologicalSex:
+            return setIfEmpty(value: value, on: \.biologicalSex)
+        }
+    }
+
+    /// Helper: append `value` as a new line to a multi-line field,
+    /// skipping the write if the field already contains that value
+    /// (case-insensitive). Prevents duplicate "Diabetes" / "diabetes"
+    /// entries when the same suggestion comes up across multiple
+    /// chats.
+    private mutating func appendUnique(value: String, to keyPath: WritableKeyPath<UserProfile, String>) -> Bool {
+        let current = self[keyPath: keyPath]
+        let needle = value.lowercased()
+        let existing = current.split(separator: "\n").map { $0.lowercased() }
+        if existing.contains(needle) { return false }
+        self[keyPath: keyPath] = current.isEmpty ? value : "\(current)\n\(value)"
+        return true
+    }
+
+    /// Helper: set a single-value field only when it's currently
+    /// empty. We never overwrite a manually-entered value with a
+    /// chat-derived one — the user's explicit input is authoritative.
+    private mutating func setIfEmpty(value: String, on keyPath: WritableKeyPath<UserProfile, String>) -> Bool {
+        let current = self[keyPath: keyPath].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard current.isEmpty else { return false }
+        self[keyPath: keyPath] = value
+        return true
+    }
+
     /// Formatted bullet list of every onboarding field that's been
     /// filled in. Inserted into both the lab-analysis prompt and the
     /// follow-up chat prompt so the model has the user's age, sex,

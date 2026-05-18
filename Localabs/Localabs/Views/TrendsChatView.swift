@@ -21,6 +21,10 @@ struct TrendsChatView: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking: Bool = false
+    /// Pending profile-suggestion banners keyed by message id.
+    /// Same shape FollowUpChatView uses; see that view for the
+    /// design rationale.
+    @State private var suggestionsByMessage: [UUID: [ProfileSuggestion]] = [:]
 
     /// Suggested-question chips shown above the input bar when the
     /// conversation is empty. Tapping one fires it as the first
@@ -53,8 +57,24 @@ struct TrendsChatView: View {
                             }
 
                             ForEach(messages) { message in
-                                messageRow(message)
-                                    .id(message.id)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    messageRow(message)
+                                    if let pending = suggestionsByMessage[message.id], !pending.isEmpty {
+                                        VStack(spacing: 6) {
+                                            ForEach(pending) { suggestion in
+                                                ProfileSuggestionBanner(suggestion: suggestion) { decision in
+                                                    handleSuggestionDecision(
+                                                        suggestion,
+                                                        messageId: message.id,
+                                                        decision: decision
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        .padding(.horizontal)
+                                    }
+                                }
+                                .id(message.id)
                             }
                         }
                         .padding(.bottom, 16)
@@ -259,9 +279,19 @@ struct TrendsChatView: View {
             .filter { !$0.isStreaming }
             .map { .init(isUser: $0.role == .user, content: $0.content) }
 
-        messages.append(ChatMessage(role: .user, content: question))
+        let userMessage = ChatMessage(role: .user, content: question)
+        let userId = userMessage.id
+        messages.append(userMessage)
         inputText = ""
         isThinking = true
+
+        // Option B: scan user's typed message for self-stated facts
+        // worth saving to profile. Same flow as FollowUpChatView.
+        let userSuggestions = ProfileSuggestionService.extractFromUserMessage(question)
+            .filter { !alreadyInProfile($0) }
+        if !userSuggestions.isEmpty {
+            suggestionsByMessage[userId] = userSuggestions
+        }
 
         let aiMessage = ChatMessage(role: .ai, content: "", isStreaming: true)
         let aiId = aiMessage.id
@@ -283,10 +313,59 @@ struct TrendsChatView: View {
                     messages[idx].content += piece
                 }
             }
+            // Option A: parse the final model output for [PROFILE_ADD: …]
+            // signals, strip them from the visible bubble, and queue
+            // each as a banner under the AI bubble.
             if let idx = messages.firstIndex(where: { $0.id == aiId }) {
+                let parsed = ProfileSuggestionService.extractFromModelOutput(messages[idx].content)
+                messages[idx].content = parsed.cleanedText
                 messages[idx].isStreaming = false
+                let modelSuggestions = parsed.suggestions.filter { !alreadyInProfile($0) }
+                if !modelSuggestions.isEmpty {
+                    suggestionsByMessage[aiId] = modelSuggestions
+                }
             }
             isThinking = false
         }
+    }
+
+    /// Banner Add/Dismiss handler. Add writes to UserProfile via
+    /// `apply` (which dedupes and never overwrites a user-entered
+    /// single-value field); either decision removes the banner.
+    private func handleSuggestionDecision(
+        _ suggestion: ProfileSuggestion,
+        messageId: UUID,
+        decision: ProfileSuggestionBanner.Decision
+    ) {
+        if decision == .added {
+            var profile = UserProfile.load()
+            if profile.apply(suggestion) {
+                profile.save()
+            }
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            suggestionsByMessage[messageId]?.removeAll { $0.id == suggestion.id }
+            if suggestionsByMessage[messageId]?.isEmpty == true {
+                suggestionsByMessage.removeValue(forKey: messageId)
+            }
+        }
+    }
+
+    /// Don't surface a banner for facts the user already has saved.
+    private func alreadyInProfile(_ suggestion: ProfileSuggestion) -> Bool {
+        let profile = UserProfile.load()
+        let needle = suggestion.value.lowercased()
+        let haystack: String
+        switch suggestion.field {
+        case .medications:       haystack = profile.medications
+        case .medicalConditions: haystack = profile.medicalConditions
+        case .familyHistory:     haystack = profile.familyHistory
+        case .smoking:           haystack = profile.smoking
+        case .alcohol:           haystack = profile.alcohol
+        case .bloodType:         haystack = profile.bloodType
+        case .age:               haystack = profile.age
+        case .biologicalSex:     haystack = profile.biologicalSex
+        }
+        return haystack.lowercased().contains(needle)
     }
 }

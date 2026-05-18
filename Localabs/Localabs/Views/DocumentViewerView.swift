@@ -755,6 +755,12 @@ struct FollowUpChatView: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var isThinking = false
+    /// Profile-suggestion banners keyed by the message they belong
+    /// to. User-stated suggestions hang under the user's bubble;
+    /// model-requested ones hang under the AI's bubble. Decisions
+    /// (Add / Dismiss) remove the suggestion from this dict so the
+    /// banner disappears.
+    @State private var suggestionsByMessage: [UUID: [ProfileSuggestion]] = [:]
 
     struct ChatMessage: Identifiable, Equatable {
         let id = UUID()
@@ -794,8 +800,32 @@ struct FollowUpChatView: View {
                             }
 
                             ForEach(messages) { message in
-                                messageRow(message: message)
-                                    .id(message.id)
+                                VStack(alignment: .leading, spacing: 8) {
+                                    messageRow(message: message)
+                                    // Suggestion banners ride with the
+                                    // bubble they belong to: user-stated
+                                    // under the user's message, model-
+                                    // requested under the AI's. The
+                                    // padding here matches the
+                                    // bubble's horizontal padding so
+                                    // banners visually anchor to the
+                                    // same column.
+                                    if let pending = suggestionsByMessage[message.id], !pending.isEmpty {
+                                        VStack(spacing: 6) {
+                                            ForEach(pending) { suggestion in
+                                                ProfileSuggestionBanner(suggestion: suggestion) { decision in
+                                                    handleSuggestionDecision(
+                                                        suggestion,
+                                                        messageId: message.id,
+                                                        decision: decision
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        .padding(.horizontal)
+                                    }
+                                }
+                                .id(message.id)
                             }
                         }
                         .padding(.vertical)
@@ -1073,9 +1103,22 @@ struct FollowUpChatView: View {
             InferenceEngine.ChatTurn(isUser: $0.role == .user, content: $0.content)
         }
 
-        messages.append(ChatMessage(role: .user, content: question))
+        let userMessage = ChatMessage(role: .user, content: question)
+        let userId = userMessage.id
+        messages.append(userMessage)
         inputText = ""
         isThinking = true
+
+        // Option B (user-stated): scan the message the user just
+        // typed for self-statements ("I take metformin", "my mom
+        // had breast cancer") and queue them as banner suggestions
+        // under their own bubble. The scan is purely pattern-based,
+        // no LLM call — runs synchronously and inexpensively.
+        let userSuggestions = ProfileSuggestionService.extractFromUserMessage(question)
+            .filter { !alreadyInProfile($0) }
+        if !userSuggestions.isEmpty {
+            suggestionsByMessage[userId] = userSuggestions
+        }
 
         let aiMessage = ChatMessage(role: .ai, content: "", isStreaming: true)
         let aiId = aiMessage.id
@@ -1107,9 +1150,66 @@ struct FollowUpChatView: View {
                 }
             }
             isThinking = false
+
+            // Option A (model-requested): once streaming ends, parse
+            // the final response for any [PROFILE_ADD: …] signals
+            // the model emitted. The parser strips those markers
+            // from the visible bubble text and surfaces each one as
+            // a banner under the AI's bubble.
             if let idx = messages.firstIndex(where: { $0.id == aiId }) {
+                let parsed = ProfileSuggestionService.extractFromModelOutput(messages[idx].content)
+                messages[idx].content = parsed.cleanedText
                 messages[idx].isStreaming = false
+                let modelSuggestions = parsed.suggestions.filter { !alreadyInProfile($0) }
+                if !modelSuggestions.isEmpty {
+                    suggestionsByMessage[aiId] = modelSuggestions
+                }
             }
         }
+    }
+
+    /// Routes a banner Add / Dismiss tap. On Add we write to
+    /// UserProfile via its `apply` method (which handles dedup +
+    /// only-overwrite-empty for single-value fields). Either way
+    /// we remove the suggestion from `suggestionsByMessage` so the
+    /// banner goes away — Add waits for the banner's internal
+    /// ✓ confirmation animation to finish before bubbling up.
+    private func handleSuggestionDecision(
+        _ suggestion: ProfileSuggestion,
+        messageId: UUID,
+        decision: ProfileSuggestionBanner.Decision
+    ) {
+        if decision == .added {
+            var profile = UserProfile.load()
+            if profile.apply(suggestion) {
+                profile.save()
+            }
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            suggestionsByMessage[messageId]?.removeAll { $0.id == suggestion.id }
+            if suggestionsByMessage[messageId]?.isEmpty == true {
+                suggestionsByMessage.removeValue(forKey: messageId)
+            }
+        }
+    }
+
+    /// Quick check so we don't surface a banner for something the
+    /// user already has in their profile. Case-insensitive
+    /// substring match against the field's stored value.
+    private func alreadyInProfile(_ suggestion: ProfileSuggestion) -> Bool {
+        let profile = UserProfile.load()
+        let needle = suggestion.value.lowercased()
+        let haystack: String
+        switch suggestion.field {
+        case .medications:       haystack = profile.medications
+        case .medicalConditions: haystack = profile.medicalConditions
+        case .familyHistory:     haystack = profile.familyHistory
+        case .smoking:           haystack = profile.smoking
+        case .alcohol:           haystack = profile.alcohol
+        case .bloodType:         haystack = profile.bloodType
+        case .age:               haystack = profile.age
+        case .biologicalSex:     haystack = profile.biologicalSex
+        }
+        return haystack.lowercased().contains(needle)
     }
 }
