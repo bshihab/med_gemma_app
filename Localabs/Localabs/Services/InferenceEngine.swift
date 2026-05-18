@@ -1012,12 +1012,15 @@ final class InferenceEngine: ObservableObject {
         Keep prose answers to 2–4 sentences. Use simple language. If the highlighted text contains a medical term, define it. If it's a lab value, explain whether it's normal and what it means.
 
         PROFILE-INFO SIGNALS (advanced):
-        If during your answer you realize Localabs would give a more accurate answer if it knew a specific personal-health fact about the user that's NOT already in the User's medical context above (e.g. a medication, condition, family history item, smoking/alcohol status, age, biological sex, or blood type), you may emit ONE structured signal anywhere in your reply:
+        You CANNOT remember anything between chats — you have no persistent memory. NEVER say things like "I'll keep that in mind", "I'll remember this", "good to know — I'll note that", "I'll factor that in next time", or any phrase that implies you can store information on the user's behalf. These promises are false and mislead the user.
+
+        Instead, when the user tells you a personal-health fact that's NOT already in their profile and that would help future answers (a medication, condition, family history item, smoking/alcohol status, age, biological sex, or blood type), emit ONE structured signal anywhere in your reply:
         `[PROFILE_ADD: <field> = "<value>"]`
         - Allowed <field> values: medications, conditions, family_history, smoking, alcohol, age, biological_sex, blood_type.
-        - <value> must be a short factual phrase the user actually stated or strongly implied (max 60 chars).
-        - The app strips this signal from the displayed message and shows the user a banner asking whether to add it — you are NOT confirming a write, you are *suggesting* one. Never invent facts the user did not state.
+        - <value> must be a short factual phrase the user actually stated (max 60 chars).
+        - The app strips this signal from your message and shows the user a *popup* asking whether to add it to their profile — that popup is the ONLY thing that actually saves the fact. Without the signal, the fact is lost.
         - Use this AT MOST ONCE per reply, only when it would genuinely improve future answers. If everything you need is already in the user's context, do not emit a signal.
+        - When the user shares something save-worthy, your prose can briefly acknowledge it ("Thanks for sharing that"), but DO NOT promise to remember it — let the signal + popup do the work.
         """
 
         var prompt = ""
@@ -1089,11 +1092,11 @@ final class InferenceEngine: ObservableObject {
         - Keep prose answers to 3–6 sentences unless the user explicitly asks for more depth.
 
         PROFILE-INFO SIGNALS (advanced):
-        If your answer would meaningfully improve with a piece of personal-health info that's NOT in the user's profile above (a medication, condition, family history item, smoking/alcohol status, age, biological sex, or blood type) AND the user has implied or stated it, you may emit ONE signal anywhere in your reply:
+        You have NO persistent memory across chats. Never say "I'll remember", "I'll keep that in mind", or any phrase implying you can store info — those are false promises.
+
+        Instead, when the user states a personal-health fact NOT in their profile (medication, condition, family history, smoking/alcohol, age, biological sex, blood type) that would improve future answers, emit ONE signal anywhere in your reply:
         `[PROFILE_ADD: <field> = "<value>"]`
-        - Allowed <field>: medications, conditions, family_history, smoking, alcohol, age, biological_sex, blood_type.
-        - The app strips this signal and surfaces an "Add to profile?" banner to the user — the write only happens if they tap Add.
-        - Use AT MOST ONCE per reply. Do not invent facts the user has not stated.
+        Allowed <field>: medications, conditions, family_history, smoking, alcohol, age, biological_sex, blood_type. The app strips the signal and shows a popup — that popup is what actually saves it. Use AT MOST ONCE per reply. Do not invent facts.
         """
 
         var prompt = ""
@@ -1204,9 +1207,11 @@ final class InferenceEngine: ObservableObject {
         - Keep prose answers to 2–5 sentences unless the user asks for more depth.
 
         PROFILE-INFO SIGNALS (advanced):
-        If interpreting this metric would benefit from a piece of personal-health info the profile doesn't have (medication, condition, family history, smoking/alcohol, age, biological_sex, blood_type) AND the user has stated or strongly implied it, emit ONE signal anywhere in your reply:
+        You have NO persistent memory across chats. Never say "I'll remember" or "I'll keep that in mind" — false promises.
+
+        When interpreting this metric would benefit from a personal-health fact the profile doesn't have (medication, condition, family history, smoking/alcohol, age, biological_sex, blood_type) AND the user has stated it, emit ONE signal:
         `[PROFILE_ADD: <field> = "<value>"]`
-        The app strips this signal and asks the user to confirm. Use AT MOST ONCE. Do not invent facts.
+        The app strips it and shows the user a popup — the popup is what saves it. Use AT MOST ONCE. Do not invent facts.
         """
 
         var prompt = ""

@@ -99,8 +99,13 @@ enum ProfileSuggestionService {
             found.append(ProfileSuggestion(field: .alcohol, value: "Drinks alcohol", source: .userStated))
         }
 
-        // — Family history — "my mom/dad/mother/father/sister/brother has X"
-        let famPattern = #"my\s+(mom|dad|mother|father|brother|sister|grandma|grandpa|grandfather|grandmother|aunt|uncle)\s+(?:has|had)\s+([a-z][a-z0-9\-\s]{2,50}?)(?:[.,!?\n]|$)"#
+        // — Family history — broad set of phrasings so the scanner
+        // catches what people actually type, not just "my X has Y".
+        // Pattern 1: "my <relative> has/had/was diagnosed with/
+        // suffers from/passed from/died of <condition>".
+        let relativeAlt = "mom|dad|mother|father|brother|sister|grandma|grandpa|grandfather|grandmother|aunt|uncle|parents|grandparents|cousin"
+        let famVerb = "has|had|is\\s+diagnosed\\s+with|was\\s+diagnosed\\s+with|suffers?\\s+from|passed\\s+(?:away\\s+)?from|died\\s+(?:from|of)|is\\s+on\\s+(?:chemo|medication|meds)\\s+for"
+        let famPattern = "my\\s+(\(relativeAlt))\\s+(?:\(famVerb))\\s+([a-z][a-z0-9\\-\\s]{2,50}?)(?:[.,!?\\n]|$)"
         if let regex = try? NSRegularExpression(pattern: famPattern, options: []) {
             let nsRange = NSRange(lowered.startIndex..., in: lowered)
             let matches = regex.matches(in: lowered, range: nsRange)
@@ -114,6 +119,20 @@ enum ProfileSuggestionService {
                 guard isPlausibleMedicationOrCondition(condition) else { continue }
                 let formatted = "\(relative): \(condition)"
                 found.append(ProfileSuggestion(field: .familyHistory, value: formatted, source: .userStated))
+            }
+        }
+        // Pattern 2: generic "runs in my family" / "family history of"
+        // — captures the condition without the relative.
+        let famGenericPattern = #"(?:family\s+history\s+of|runs\s+in\s+(?:my|the)\s+family\s*[:\-]?|in\s+my\s+family[,\s]+(?:we\s+have\s+|theres?\s+|there\s+is\s+))\s*([a-z][a-z0-9\-\s]{2,50}?)(?:[.,!?\n]|$)"#
+        if let regex = try? NSRegularExpression(pattern: famGenericPattern, options: []) {
+            let nsRange = NSRange(lowered.startIndex..., in: lowered)
+            for match in regex.matches(in: lowered, range: nsRange) {
+                guard match.numberOfRanges >= 2,
+                      let conditionRange = Range(match.range(at: 1), in: lowered)
+                else { continue }
+                let condition = cleanFragment(String(lowered[conditionRange]))
+                guard isPlausibleMedicationOrCondition(condition) else { continue }
+                found.append(ProfileSuggestion(field: .familyHistory, value: condition, source: .userStated))
             }
         }
 

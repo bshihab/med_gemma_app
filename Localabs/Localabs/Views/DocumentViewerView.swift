@@ -755,12 +755,14 @@ struct FollowUpChatView: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText = ""
     @State private var isThinking = false
-    /// Profile-suggestion banners keyed by the message they belong
-    /// to. User-stated suggestions hang under the user's bubble;
-    /// model-requested ones hang under the AI's bubble. Decisions
-    /// (Add / Dismiss) remove the suggestion from this dict so the
-    /// banner disappears.
-    @State private var suggestionsByMessage: [UUID: [ProfileSuggestion]] = [:]
+    /// FIFO queue of profile suggestions awaiting user decision.
+    /// Replaced the previous inline banner UI — users were missing
+    /// banners that sat under bubbles, especially when the model
+    /// reply above said something reassuring like "I'll remember
+    /// that." A popup alert is unmissable and forces an explicit
+    /// Add / Skip. The queue lets multiple suggestions from a single
+    /// message (e.g. "I'm 35, I take metformin") present in sequence.
+    @State private var suggestionQueue: [ProfileSuggestion] = []
 
     struct ChatMessage: Identifiable, Equatable {
         let id = UUID()
@@ -800,32 +802,8 @@ struct FollowUpChatView: View {
                             }
 
                             ForEach(messages) { message in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    messageRow(message: message)
-                                    // Suggestion banners ride with the
-                                    // bubble they belong to: user-stated
-                                    // under the user's message, model-
-                                    // requested under the AI's. The
-                                    // padding here matches the
-                                    // bubble's horizontal padding so
-                                    // banners visually anchor to the
-                                    // same column.
-                                    if let pending = suggestionsByMessage[message.id], !pending.isEmpty {
-                                        VStack(spacing: 6) {
-                                            ForEach(pending) { suggestion in
-                                                ProfileSuggestionBanner(suggestion: suggestion) { decision in
-                                                    handleSuggestionDecision(
-                                                        suggestion,
-                                                        messageId: message.id,
-                                                        decision: decision
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        .padding(.horizontal)
-                                    }
-                                }
-                                .id(message.id)
+                                messageRow(message: message)
+                                    .id(message.id)
                             }
                         }
                         .padding(.vertical)
@@ -849,6 +827,7 @@ struct FollowUpChatView: View {
                 inputBar
             }
             .background(Color.clear)
+            .profileSuggestionAlert(queue: $suggestionQueue)
             .navigationTitle("Ask Localabs")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1109,16 +1088,16 @@ struct FollowUpChatView: View {
         inputText = ""
         isThinking = true
 
-        // Option B (user-stated): scan the message the user just
-        // typed for self-statements ("I take metformin", "my mom
-        // had breast cancer") and queue them as banner suggestions
-        // under their own bubble. The scan is purely pattern-based,
-        // no LLM call — runs synchronously and inexpensively.
+        // Option B (user-stated): scan the typed message for self-
+        // statements ("I take metformin", "my mom had breast cancer")
+        // and enqueue them as popup alerts. The scan is purely
+        // pattern-based — no LLM call, runs synchronously.
+        // userId is unused now but kept above for symmetry with the
+        // ai branch and in case the inline-banner UI returns.
+        _ = userId
         let userSuggestions = ProfileSuggestionService.extractFromUserMessage(question)
             .filter { !alreadyInProfile($0) }
-        if !userSuggestions.isEmpty {
-            suggestionsByMessage[userId] = userSuggestions
-        }
+        suggestionQueue.append(contentsOf: userSuggestions)
 
         let aiMessage = ChatMessage(role: .ai, content: "", isStreaming: true)
         let aiId = aiMessage.id
@@ -1152,43 +1131,16 @@ struct FollowUpChatView: View {
             isThinking = false
 
             // Option A (model-requested): once streaming ends, parse
-            // the final response for any [PROFILE_ADD: …] signals
-            // the model emitted. The parser strips those markers
-            // from the visible bubble text and surfaces each one as
-            // a banner under the AI's bubble.
+            // the final response for [PROFILE_ADD: …] signals, strip
+            // them from the visible bubble, and enqueue each as a
+            // popup alert. The visible text is the cleaned version
+            // so users never see the bracketed markers.
             if let idx = messages.firstIndex(where: { $0.id == aiId }) {
                 let parsed = ProfileSuggestionService.extractFromModelOutput(messages[idx].content)
                 messages[idx].content = parsed.cleanedText
                 messages[idx].isStreaming = false
                 let modelSuggestions = parsed.suggestions.filter { !alreadyInProfile($0) }
-                if !modelSuggestions.isEmpty {
-                    suggestionsByMessage[aiId] = modelSuggestions
-                }
-            }
-        }
-    }
-
-    /// Routes a banner Add / Dismiss tap. On Add we write to
-    /// UserProfile via its `apply` method (which handles dedup +
-    /// only-overwrite-empty for single-value fields). Either way
-    /// we remove the suggestion from `suggestionsByMessage` so the
-    /// banner goes away — Add waits for the banner's internal
-    /// ✓ confirmation animation to finish before bubbling up.
-    private func handleSuggestionDecision(
-        _ suggestion: ProfileSuggestion,
-        messageId: UUID,
-        decision: ProfileSuggestionBanner.Decision
-    ) {
-        if decision == .added {
-            var profile = UserProfile.load()
-            if profile.apply(suggestion) {
-                profile.save()
-            }
-        }
-        withAnimation(.easeOut(duration: 0.2)) {
-            suggestionsByMessage[messageId]?.removeAll { $0.id == suggestion.id }
-            if suggestionsByMessage[messageId]?.isEmpty == true {
-                suggestionsByMessage.removeValue(forKey: messageId)
+                suggestionQueue.append(contentsOf: modelSuggestions)
             }
         }
     }

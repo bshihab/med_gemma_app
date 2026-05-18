@@ -29,9 +29,8 @@ struct MetricChatView: View {
     @State private var messages: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking: Bool = false
-    /// Profile-suggestion banners keyed by message id. See
-    /// FollowUpChatView for the full design rationale.
-    @State private var suggestionsByMessage: [UUID: [ProfileSuggestion]] = [:]
+    /// FIFO popup-alert queue. See FollowUpChatView for design notes.
+    @State private var suggestionQueue: [ProfileSuggestion] = []
 
     struct ChatMessage: Identifiable, Equatable {
         let id = UUID()
@@ -66,24 +65,8 @@ struct MetricChatView: View {
                             }
 
                             ForEach(messages) { message in
-                                VStack(alignment: .leading, spacing: 8) {
-                                    messageRow(message)
-                                    if let pending = suggestionsByMessage[message.id], !pending.isEmpty {
-                                        VStack(spacing: 6) {
-                                            ForEach(pending) { suggestion in
-                                                ProfileSuggestionBanner(suggestion: suggestion) { decision in
-                                                    handleSuggestionDecision(
-                                                        suggestion,
-                                                        messageId: message.id,
-                                                        decision: decision
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        .padding(.horizontal)
-                                    }
-                                }
-                                .id(message.id)
+                                messageRow(message)
+                                    .id(message.id)
                             }
                         }
                         .padding(.bottom, 16)
@@ -114,6 +97,7 @@ struct MetricChatView: View {
                 }
             }
             .background(Color(uiColor: .systemBackground))
+            .profileSuggestionAlert(queue: $suggestionQueue)
         }
         .presentationContentInteraction(.scrolls)
     }
@@ -281,18 +265,15 @@ struct MetricChatView: View {
             .filter { !$0.isStreaming }
             .map { .init(isUser: $0.role == .user, content: $0.content) }
 
-        let userMessage = ChatMessage(role: .user, content: question)
-        let userId = userMessage.id
-        messages.append(userMessage)
+        messages.append(ChatMessage(role: .user, content: question))
         inputText = ""
         isThinking = true
 
-        // Option B: scan typed message for profile-worthy facts.
+        // Option B: scan typed message for profile-worthy facts;
+        // enqueue them so the popup-alert modifier picks them up.
         let userSuggestions = ProfileSuggestionService.extractFromUserMessage(question)
             .filter { !alreadyInProfile($0) }
-        if !userSuggestions.isEmpty {
-            suggestionsByMessage[userId] = userSuggestions
-        }
+        suggestionQueue.append(contentsOf: userSuggestions)
 
         let aiMessage = ChatMessage(role: .ai, content: "", isStreaming: true)
         let aiId = aiMessage.id
@@ -341,40 +322,15 @@ struct MetricChatView: View {
                 }
             }
             // Option A: parse model output for [PROFILE_ADD: …]
-            // signals, strip markers from bubble, queue banners.
+            // signals, strip markers, enqueue for popup.
             if let idx = messages.firstIndex(where: { $0.id == aiId }) {
                 let parsed = ProfileSuggestionService.extractFromModelOutput(messages[idx].content)
                 messages[idx].content = parsed.cleanedText
                 messages[idx].isStreaming = false
                 let modelSuggestions = parsed.suggestions.filter { !alreadyInProfile($0) }
-                if !modelSuggestions.isEmpty {
-                    suggestionsByMessage[aiId] = modelSuggestions
-                }
+                suggestionQueue.append(contentsOf: modelSuggestions)
             }
             isThinking = false
-        }
-    }
-
-    /// Banner Add/Dismiss handler — same shape FollowUpChatView and
-    /// TrendsChatView use. Add writes via UserProfile.apply (dedupes,
-    /// never overwrites manual single-value entries); either decision
-    /// removes the banner.
-    private func handleSuggestionDecision(
-        _ suggestion: ProfileSuggestion,
-        messageId: UUID,
-        decision: ProfileSuggestionBanner.Decision
-    ) {
-        if decision == .added {
-            var profile = UserProfile.load()
-            if profile.apply(suggestion) {
-                profile.save()
-            }
-        }
-        withAnimation(.easeOut(duration: 0.2)) {
-            suggestionsByMessage[messageId]?.removeAll { $0.id == suggestion.id }
-            if suggestionsByMessage[messageId]?.isEmpty == true {
-                suggestionsByMessage.removeValue(forKey: messageId)
-            }
         }
     }
 
