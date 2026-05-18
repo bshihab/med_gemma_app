@@ -98,8 +98,10 @@ struct TrendsView: View {
                     label: metric.label,
                     series: metric.series,
                     tint: metric.tint,
-                    rangeDays: rangeDays
+                    rangeDays: rangeDays,
+                    siblingMetrics: makeHealthMetricsForChat()
                 )
+                .environmentObject(engine)
             }
         }
     }
@@ -427,22 +429,23 @@ struct TrendsView: View {
         let context = HealthInsights.clinicalContext(for: label)
         let status = context?.interpret(series.average) ?? .unknown
         let delta = deltaString(for: series)
+        let isCumulative = HealthInsights.isCumulativeMetric(label)
 
         return Button {
             presentedMetric = PresentedMetric(label: label, series: series, tint: tint)
         } label: {
             VStack(alignment: .leading, spacing: 8) {
                 Text(label)
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
                 HStack(alignment: .lastTextBaseline, spacing: 4) {
                     Text(format(series.average))
-                        .font(.system(size: 22, weight: .bold).monospacedDigit())
+                        .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
                         .foregroundStyle(.primary)
                     Text(series.unit)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(.secondary)
                 }
 
@@ -454,27 +457,46 @@ struct TrendsView: View {
                         Image(systemName: delta.direction > 0 ? "arrow.up" : "arrow.down")
                             .font(.system(size: 9, weight: .bold))
                         Text(delta.text)
-                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
                     }
                     .foregroundStyle(delta.tint)
                 }
 
-                Chart(series.daily) { day in
-                    AreaMark(
-                        x: .value("Date", day.date),
-                        y: .value(label, day.value)
-                    )
-                    .foregroundStyle(LinearGradient(
-                        colors: [tint.opacity(0.55), tint.opacity(0.05)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ))
-                    LineMark(
-                        x: .value("Date", day.date),
-                        y: .value(label, day.value)
-                    )
-                    .foregroundStyle(tint)
-                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+                // Sparkline: bars for cumulative metrics (steps, etc.)
+                // so the day-to-day discrete totals read clearly; a
+                // smooth line+area for continuous metrics (HR, HRV,
+                // weight) so the trend reads as a single curve.
+                Chart {
+                    ForEach(series.daily) { day in
+                        if isCumulative {
+                            BarMark(
+                                x: .value("Date", day.date, unit: .day),
+                                y: .value(label, day.value),
+                                width: .ratio(0.7)
+                            )
+                            .foregroundStyle(tint.gradient)
+                            .cornerRadius(1.5)
+                        } else {
+                            AreaMark(
+                                x: .value("Date", day.date),
+                                y: .value(label, day.value)
+                            )
+                            .foregroundStyle(LinearGradient(
+                                colors: [tint.opacity(0.45), tint.opacity(0.03)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ))
+                            .interpolationMethod(.catmullRom)
+
+                            LineMark(
+                                x: .value("Date", day.date),
+                                y: .value(label, day.value)
+                            )
+                            .foregroundStyle(tint)
+                            .lineStyle(StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+                            .interpolationMethod(.catmullRom)
+                        }
+                    }
                 }
                 .chartXAxis(.hidden)
                 .chartYAxis(.hidden)
@@ -493,7 +515,7 @@ struct TrendsView: View {
                             .fill(status.color)
                             .frame(width: 6, height: 6)
                         Text(status.label)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
                             .foregroundStyle(status.color)
                     }
                 }
@@ -505,10 +527,12 @@ struct TrendsView: View {
         .buttonStyle(.plain)
     }
 
-    /// Builds the "↑ 4% vs prior" copy. Returns nil if the prior
-    /// window had no data (so we omit the line entirely instead of
-    /// showing "—" or "0%"). Direction-aware so we can color the
-    /// arrow even if the user doesn't read the text.
+    /// Builds the "↑ 4% vs previous 30 days" copy. Returns nil if the
+    /// prior window had no data (so we omit the line entirely instead
+    /// of showing "—" or "0%"). Direction-aware so we can color the
+    /// arrow even if the user doesn't read the text. The cards use a
+    /// short form ("vs prev 30d") to fit two-column layout; the detail
+    /// sheet uses the long form spelled out.
     private func deltaString(for series: HealthKitService.MetricSeries) -> (text: String, direction: Int, tint: Color)? {
         guard let prior = series.previousAverage, prior > 0 else { return nil }
         let change = (series.average - prior) / prior
@@ -519,7 +543,7 @@ struct TrendsView: View {
         // and orange for "down" — viewers can interpret per their own
         // goals. We don't try to be clever here.
         let tint: Color = change > 0 ? .blue : .orange
-        return ("\(abs(pct))% vs prior period", change > 0 ? 1 : -1, tint)
+        return ("\(abs(pct))% vs prev \(rangeDays)d", change > 0 ? 1 : -1, tint)
     }
 
     // MARK: - Empty / disconnected states
@@ -676,15 +700,26 @@ struct TrendsView: View {
 // MARK: - Metric detail sheet
 
 /// Sheet shown when the user taps any metric card on the Trends tab.
-/// Surfaces a full-size chart, the status interpretation, a clinical
-/// context paragraph, and a delta-vs-prior line. The "Ask Localabs"
-/// CTA at the bottom is wired up in a follow-up commit.
+/// Apple-Health-style layout: big bold rounded number up top, full
+/// chart (bars for cumulative metrics, smooth line+area for
+/// continuous), then status legend, clinical context, and a CTA to
+/// open a chat scoped to this single metric.
 struct MetricDetailView: View {
     let label: String
     let series: HealthKitService.MetricSeries
     let tint: Color
     let rangeDays: Int
+    /// The other metric averages from the same snapshot. Passed
+    /// through to the per-metric chat so the model can cross-reference
+    /// siblings (e.g. low HRV + short sleep) without us having to
+    /// hit HealthKit again.
+    var siblingMetrics: HealthKitService.HealthMetrics = HealthKitService.HealthMetrics()
+
+    @EnvironmentObject var engine: InferenceEngine
     @Environment(\.dismiss) private var dismiss
+    @State private var showMetricChat: Bool = false
+
+    private var isCumulative: Bool { HealthInsights.isCumulativeMetric(label) }
 
     var body: some View {
         NavigationStack {
@@ -692,6 +727,8 @@ struct MetricDetailView: View {
                 VStack(alignment: .leading, spacing: 18) {
                     headlineCard
                     chartCard
+                    askLocalabsCTA
+                    statusLegendCard
                     if let context = HealthInsights.clinicalContext(for: label) {
                         contextCard(context)
                     }
@@ -709,23 +746,42 @@ struct MetricDetailView: View {
                     Button("Done") { dismiss() }
                 }
             }
+            .sheet(isPresented: $showMetricChat) {
+                MetricChatView(
+                    label: label,
+                    series: series,
+                    tint: tint,
+                    rangeDays: rangeDays,
+                    siblingMetrics: siblingMetrics
+                )
+                .environmentObject(engine)
+            }
         }
     }
+
+    // MARK: Headline (big rounded number, status pill, delta)
 
     private var headlineCard: some View {
         let context = HealthInsights.clinicalContext(for: label)
         let status = context?.interpret(series.average) ?? .unknown
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 14) {
+            // "AVERAGE" pill above the value, Apple Health style.
+            Text(isCumulative ? "DAILY AVERAGE" : "AVERAGE")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.secondary)
+                .tracking(1.4)
+
             HStack(alignment: .lastTextBaseline, spacing: 6) {
                 Text(format(series.average))
-                    .font(.system(size: 44, weight: .bold).monospacedDigit())
+                    .font(.system(size: 48, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
                 Text(series.unit)
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
                     .foregroundStyle(.secondary)
             }
-            Text("Average over the last \(rangeDays) days")
-                .font(.system(size: 13))
+
+            Text("Last \(rangeDays) days")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 10) {
@@ -735,7 +791,7 @@ struct MetricDetailView: View {
                             .fill(status.color)
                             .frame(width: 8, height: 8)
                         Text(status.label)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .foregroundStyle(status.color)
                     }
                     .padding(.horizontal, 10)
@@ -752,8 +808,8 @@ struct MetricDetailView: View {
                         HStack(spacing: 4) {
                             Image(systemName: change > 0 ? "arrow.up" : "arrow.down")
                                 .font(.system(size: 10, weight: .bold))
-                            Text("\(abs(pct))% vs prior")
-                                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                            Text("\(abs(pct))% vs previous \(rangeDays) days")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
                         }
                         .foregroundStyle(change > 0 ? Color.blue : Color.orange)
                     }
@@ -761,43 +817,82 @@ struct MetricDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
+        .padding(20)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
-    private var chartCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Last \(rangeDays) days")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.secondary)
+    // MARK: Chart (Apple Health style)
 
-            Chart(series.daily) { day in
-                AreaMark(
-                    x: .value("Date", day.date),
-                    y: .value(label, day.value)
-                )
-                .foregroundStyle(LinearGradient(
-                    colors: [tint.opacity(0.45), tint.opacity(0.05)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ))
-                LineMark(
-                    x: .value("Date", day.date),
-                    y: .value(label, day.value)
-                )
-                .foregroundStyle(tint)
-                .lineStyle(StrokeStyle(lineWidth: 2))
+    /// Renders bars for cumulative metrics (Steps, Distance, Flights,
+    /// Exercise minutes, Active energy, Caffeine) and a smooth
+    /// line+area for continuous metrics. Axis labels are SF Rounded
+    /// to match the Apple Health typography hierarchy.
+    private var chartCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Soft inline range label, top-left of the card —
+            // duplicates "Last X days" subtly so the user always knows
+            // what window the chart spans without scrolling back up.
+            HStack {
+                Text("\(rangeDays.formatted()) DAYS")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .tracking(1.3)
+                Spacer()
+            }
+
+            Chart {
+                ForEach(series.daily) { day in
+                    if isCumulative {
+                        BarMark(
+                            x: .value("Date", day.date, unit: .day),
+                            y: .value(label, day.value),
+                            width: .ratio(0.65)
+                        )
+                        .foregroundStyle(tint.gradient)
+                        .cornerRadius(2)
+                    } else {
+                        AreaMark(
+                            x: .value("Date", day.date),
+                            y: .value(label, day.value)
+                        )
+                        .foregroundStyle(LinearGradient(
+                            colors: [tint.opacity(0.42), tint.opacity(0.03)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ))
+                        .interpolationMethod(.catmullRom)
+
+                        LineMark(
+                            x: .value("Date", day.date),
+                            y: .value(label, day.value)
+                        )
+                        .foregroundStyle(tint)
+                        .lineStyle(StrokeStyle(lineWidth: 2.4, lineCap: .round, lineJoin: .round))
+                        .interpolationMethod(.catmullRom)
+                    }
+                }
             }
             .chartXAxis {
-                AxisMarks(values: .automatic(desiredCount: 4)) { _ in
-                    AxisGridLine()
-                    AxisValueLabel(format: .dateTime.day().month(.abbreviated))
+                // ~4 evenly-spaced day ticks across the window — Apple
+                // Health shows day-of-month numbers like "5, 12, 19, 26"
+                // for a monthly view.
+                let stride = max(1, rangeDays / 4)
+                AxisMarks(values: .stride(by: .day, count: stride)) { _ in
+                    AxisValueLabel(format: .dateTime.day(), centered: true)
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
             }
             .chartYAxis {
-                AxisMarks(position: .leading) { _ in
-                    AxisGridLine()
+                // Y axis on the right with subtle dotted gridlines so
+                // the chart reads "Apple Health" instead of "default
+                // SwiftUI Chart."
+                AxisMarks(position: .trailing, values: .automatic(desiredCount: 3)) { _ in
+                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+                        .foregroundStyle(Color.secondary.opacity(0.35))
                     AxisValueLabel()
+                        .font(.system(size: 11, weight: .regular, design: .rounded))
+                        .foregroundStyle(.secondary)
                 }
             }
             .frame(height: 220)
@@ -807,21 +902,112 @@ struct MetricDetailView: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
+    // MARK: Ask Localabs about this trend (CTA)
+
+    /// Compact gradient CTA that opens a chat scoped to this specific
+    /// metric. Distinct from the broader Trends chat — the per-metric
+    /// chat puts THIS metric first in the prompt and treats other
+    /// metrics + past scans as supporting context.
+    private var askLocalabsCTA: some View {
+        Button {
+            showMetricChat = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 40, height: 40)
+                    Image(systemName: "sparkle.magnifyingglass")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .symbolEffect(.pulse, options: .repeat(.continuous))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ask Localabs about this trend")
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text("Focused on \(label) — plus other trends & scans for context")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [tint, tint.opacity(0.78)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .shadow(color: tint.opacity(0.28), radius: 10, y: 4)
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Status legend (what Typical / Borderline / Outside mean)
+
+    /// Three-row key explaining what each status color actually means
+    /// before the user reads their own status pill. Removes the "wait
+    /// what does borderline mean here?" ambiguity.
+    private var statusLegendCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("WHAT THE STATUS LABELS MEAN")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(.secondary)
+                    .tracking(1.2)
+                Spacer()
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(Array(HealthInsights.statusLegend().enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(item.color)
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 6)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.label)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .foregroundStyle(item.color)
+                            Text(item.description)
+                                .font(.system(size: 12, design: .rounded))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(18)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    // MARK: Clinical context
+
     private func contextCard(_ context: HealthInsights.ClinicalContext) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 Text("TYPICAL RANGE")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(.secondary)
                     .tracking(1.2)
                 Spacer()
                 Text(context.typicalRangeLabel)
-                    .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                    .font(.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit())
                     .foregroundStyle(.primary)
             }
             Divider()
             Text(context.explanation)
-                .font(.system(size: 14))
+                .font(.system(size: 14, design: .rounded))
                 .foregroundStyle(.primary)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -839,7 +1025,7 @@ struct MetricDetailView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.secondary)
             Text("These ranges are population norms from published research, not personalized medical advice. Discuss persistent changes with your doctor.")
-                .font(.system(size: 12))
+                .font(.system(size: 12, design: .rounded))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -848,6 +1034,13 @@ struct MetricDetailView: View {
     }
 
     private func format(_ value: Double) -> String {
+        // For cumulative metrics with big numbers (steps especially),
+        // Apple Health uses comma grouping ("5,326"). Re-using the
+        // localized number formatter so the user's locale dictates the
+        // separator.
+        if isCumulative && value >= 1000 {
+            return value.formatted(.number.precision(.fractionLength(0)))
+        }
         if value >= 100 { return String(format: "%.0f", value) }
         if value >= 10  { return String(format: "%.1f", value) }
         return String(format: "%.2f", value)

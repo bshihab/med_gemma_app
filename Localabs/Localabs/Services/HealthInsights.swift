@@ -37,6 +37,34 @@ enum HealthInsights {
         }
     }
 
+    /// Whether a metric should render as bars (cumulative totals like
+    /// step count, where each day is its own discrete column) vs. a
+    /// smooth line+area (continuous measurements like resting HR or
+    /// HRV, where the eye reads change over time). Matches the way
+    /// Apple Health renders the same metric families.
+    static func isCumulativeMetric(_ label: String) -> Bool {
+        [
+            "Steps",
+            "Walking + running",
+            "Flights climbed",
+            "Exercise minutes",
+            "Active energy",
+            "Caffeine"
+        ].contains(label)
+    }
+
+    /// Plain-language descriptions of the three status labels, used by
+    /// the metric detail sheet so users understand what "Typical /
+    /// Borderline / Outside typical" actually means before they read
+    /// their own number.
+    static func statusLegend() -> [(label: String, color: Color, description: String)] {
+        [
+            ("Typical", .green, "Falls inside the population norm range from peer-reviewed research."),
+            ("Borderline", .orange, "Just outside the typical range — worth keeping an eye on, but rarely urgent on its own."),
+            ("Outside typical", .red, "Clearly outside population norms. Trend matters more than a single reading — discuss persistent values with your doctor.")
+        ]
+    }
+
     /// Map from a metric's display label (the one passed to
     /// `section(...)` in TrendsView) to its interpretation logic.
     /// Returning nil means "no clinical context known for this metric"

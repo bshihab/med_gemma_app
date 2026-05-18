@@ -824,29 +824,36 @@ final class InferenceEngine: ObservableObject {
         healthMetrics: HealthKitService.HealthMetrics
     ) -> AsyncStream<String> {
         let profile = UserProfile.load()
-        let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 5)
+        // Scans are secondary context here — cap at 3 reports (was 5) so
+        // the trends block stays the dominant signal in the prompt.
+        let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 3)
 
         let systemHeader = """
-        You are an empathetic medical assistant. The user is asking about their broader health trends — they're NOT asking about a specific lab report, they're asking about how their day-to-day health (activity, sleep, vitals from Apple Health) interacts with their past lab results and their personal health profile.
+        You are an empathetic medical assistant. The user is in the Health Trends tab and wants to understand their Apple Health data over time — activity, sleep, vitals, mobility, cardio recovery. THIS IS THE PRIMARY CONTEXT for your answer.
 
-        User's Personal Health Context:
+        ╔══ PRIMARY: User's Apple Health trends (30-day averages) ══╗
+        - Resting HR: \(healthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")
+        - HRV: \(healthMetrics.avgHRV.map { "\($0) ms" } ?? "Unknown")
+        - Sleep: \(healthMetrics.avgSleepHours.map { "\($0) hours" } ?? "Unknown")
+        - Daily steps: \(healthMetrics.avgSteps.map { String(format: "%.0f", $0) } ?? "Unknown")
+        - Daily walking/running distance: \(healthMetrics.avgWalkingDistanceMiles.map { String(format: "%.2f mi", $0) } ?? "Unknown")
+        - Walking speed: \(healthMetrics.avgWalkingSpeedMPH.map { String(format: "%.2f mph", $0) } ?? "Unknown")
+        - Daily exercise minutes: \(healthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")
+        ╚════════════════════════════════════════════════════════════╝
+
+        SECONDARY context — the user's personal health profile (for personalizing recommendations to their age/sex/conditions):
         \(profile.promptContextBullets)
 
-        User's Apple Health data (30-day averages):
-        - Resting HR: \(healthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")
-        - Sleep: \(healthMetrics.avgSleepHours.map { "\($0) hours" } ?? "Unknown")
-        - HRV: \(healthMetrics.avgHRV.map { "\($0) ms" } ?? "Unknown")
-        - Daily steps: \(healthMetrics.avgSteps.map { String(format: "%.0f", $0) } ?? "Unknown")
-        - Daily walking/running: \(healthMetrics.avgWalkingDistanceMiles.map { String(format: "%.2f mi", $0) } ?? "Unknown")
-        - Walking speed: \(healthMetrics.avgWalkingSpeedMPH.map { String(format: "%.2f mph", $0) } ?? "Unknown")
-        - Daily exercise minutes: \(healthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")\(ragContext)
+        TERTIARY context — the user's past lab reports (reference only; bring them up *only* when a trend specifically connects to a past lab finding, e.g. "your HRV drop lines up with the elevated cortisol in your March panel"):\(ragContext)
 
         How to answer:
-        - Synthesize across the user's profile, recent Health data, AND past lab reports. Connect the dots — e.g. "your HRV trend lined up with the elevated cortisol in your March panel" — when you can.
+        - LEAD with the Apple Health trends. They are why the user is here.
+        - Use the profile to personalize (age-appropriate targets, etc.) but don't make it the main subject.
+        - Reference past labs only when they materially connect to the question. If a trend question has no lab connection, don't shoehorn one in.
         - Suggest concrete, actionable lifestyle moves the user could discuss with their doctor: sleep targets, walking minutes, dietary shifts.
-        - Do NOT prescribe medications, dosages, or specific medical treatments. That's the doctor's job.
-        - Flag anything that warrants doctor follow-up explicitly with a ⚠️ if you spot it.
-        - Format with **bold** for medical terms / lab values / numbers, *italics* sparingly, bullet points for short lists, and Markdown tables only when comparing 3+ values across categories.
+        - Do NOT prescribe medications, dosages, or specific medical treatments.
+        - Flag anything that warrants doctor follow-up explicitly with a ⚠️.
+        - Format with **bold** for medical terms / metric values / numbers, *italics* sparingly, bullet points for short lists, and Markdown tables only when comparing 3+ values across categories.
         - Keep prose answers to 3–6 sentences unless the user explicitly asks for more depth.
         """
 
@@ -871,5 +878,113 @@ final class InferenceEngine: ObservableObject {
         }
 
         return context.predict(prompt: prompt, maxTokens: 500)
+    }
+
+    /// Streams the answer to a question scoped to a single Apple Health
+    /// metric (the user is in the Metric Detail sheet's chat). The
+    /// system prompt orders context strictly:
+    ///   1. The focus metric itself — its value, unit, range window,
+    ///      delta, clinical range, and explanation. This is the
+    ///      subject of the conversation.
+    ///   2. Other Apple Health metrics — siblings the model can
+    ///      cross-reference (e.g. "your low HRV is consistent with
+    ///      your short sleep duration").
+    ///   3. Past lab reports — only invoked when a connection is
+    ///      genuinely there ("your elevated walking HR could relate
+    ///      to the iron-deficiency findings in your March panel").
+    /// Profile bullets ride along as personalization, not as the
+    /// subject.
+    func askAboutMetric(
+        question: String,
+        history: [ChatTurn] = [],
+        metricLabel: String,
+        metricValue: String,
+        metricUnit: String,
+        metricRangeDays: Int,
+        metricStatusLabel: String?,
+        metricTypicalRange: String?,
+        metricExplanation: String?,
+        metricDelta: String?,
+        otherHealthMetrics: HealthKitService.HealthMetrics
+    ) -> AsyncStream<String> {
+        let profile = UserProfile.load()
+        // Past scans are tertiary here — keep the slice small so the
+        // metric block stays dominant in the context window.
+        let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 2)
+
+        // The metric block is the heart of the prompt: everything the
+        // user can see on the detail screen, fed in verbatim so the
+        // model and the screen agree on the facts.
+        var metricLines: [String] = [
+            "- Metric: \(metricLabel)",
+            "- User's \(metricRangeDays)-day average: \(metricValue) \(metricUnit)"
+        ]
+        if let delta = metricDelta {
+            metricLines.append("- Change: \(delta)")
+        }
+        if let status = metricStatusLabel {
+            metricLines.append("- Status vs. population norms: \(status)")
+        }
+        if let range = metricTypicalRange {
+            metricLines.append("- Typical range: \(range)")
+        }
+        if let explanation = metricExplanation {
+            metricLines.append("- What it measures: \(explanation)")
+        }
+        let metricBlock = metricLines.joined(separator: "\n        ")
+
+        let systemHeader = """
+        You are an empathetic medical assistant. The user is looking at a single Apple Health metric in detail and wants to understand it.
+
+        ╔══ PRIMARY: The metric the user is asking about ══╗
+        \(metricBlock)
+        ╚═══════════════════════════════════════════════════╝
+
+        SECONDARY — other Apple Health trends (cross-reference only when relevant):
+        - Resting HR: \(otherHealthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")
+        - HRV: \(otherHealthMetrics.avgHRV.map { "\($0) ms" } ?? "Unknown")
+        - Sleep: \(otherHealthMetrics.avgSleepHours.map { "\($0) hours" } ?? "Unknown")
+        - Daily steps: \(otherHealthMetrics.avgSteps.map { String(format: "%.0f", $0) } ?? "Unknown")
+        - Daily walking/running distance: \(otherHealthMetrics.avgWalkingDistanceMiles.map { String(format: "%.2f mi", $0) } ?? "Unknown")
+        - Walking speed: \(otherHealthMetrics.avgWalkingSpeedMPH.map { String(format: "%.2f mph", $0) } ?? "Unknown")
+        - Daily exercise minutes: \(otherHealthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")
+
+        Personal health profile (use to personalize, not as subject):
+        \(profile.promptContextBullets)
+
+        TERTIARY context — past lab reports (only mention if the metric question genuinely connects to a past lab finding):\(ragContext)
+
+        How to answer:
+        - The focus metric IS the topic. Answer about it directly first.
+        - Bring in another Health metric only when it materially helps interpret the focus metric (e.g. low HRV + short sleep → recovery pattern).
+        - Reference past labs only when there's a real connection. If not, don't force one.
+        - Suggest concrete, actionable next steps the user can discuss with their doctor.
+        - Do NOT prescribe medications, dosages, or specific medical treatments.
+        - Flag anything that warrants doctor follow-up with ⚠️.
+        - Format with **bold** for numbers / medical terms, bullet points for short lists.
+        - Keep prose answers to 2–5 sentences unless the user asks for more depth.
+        """
+
+        var prompt = ""
+        if let firstTurn = history.first, firstTurn.isUser {
+            prompt += "<start_of_turn>user\n\(systemHeader)\n\nTheir first question: \"\(firstTurn.content)\"\n<end_of_turn>\n"
+            for turn in history.dropFirst() {
+                let role = turn.isUser ? "user" : "model"
+                prompt += "<start_of_turn>\(role)\n\(turn.content)\n<end_of_turn>\n"
+            }
+            prompt += "<start_of_turn>user\n\(question)\n<end_of_turn>\n<start_of_turn>model\n"
+        } else {
+            prompt += "<start_of_turn>user\n\(systemHeader)\n\nTheir question: \"\(question)\"\n<end_of_turn>\n<start_of_turn>model\n"
+        }
+
+        guard let context = llamaContext else {
+            let model = selectedModel
+            return AsyncStream { continuation in
+                continuation.yield("Localabs isn't loaded yet. Download \(model.displayName) in Profile to ask about your \(metricLabel) trend.")
+                continuation.finish()
+            }
+        }
+
+        return context.predict(prompt: prompt, maxTokens: 450)
     }
 }
