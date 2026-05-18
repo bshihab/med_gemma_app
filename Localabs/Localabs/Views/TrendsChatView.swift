@@ -57,16 +57,20 @@ struct TrendsChatView: View {
                                     .id(message.id)
                             }
 
+                            // iMessage-style typing indicator only while we're
+                            // still waiting on the very first token. Once
+                            // tokens start streaming, the AI bubble itself
+                            // grows in place and this indicator goes away.
                             if isThinking {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "brain.head.profile")
-                                        .font(.system(size: 18))
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "sparkle")
+                                        .font(.system(size: 20))
                                         .foregroundStyle(.blue)
-                                    ProgressView()
-                                    Text("Thinking…")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
+                                        .padding(.top, 6)
+                                    TypingDots()
+                                    Spacer(minLength: 0)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal)
                             }
                         }
@@ -204,16 +208,27 @@ struct TrendsChatView: View {
                 .padding(.vertical, 12)
                 .glassEffect(.regular, in: Capsule())
 
+            // Liquid-glass send button: tinted blue when there's
+            // something to send, plain glass when disabled. Matches
+            // the FollowUpChatView pattern so the two chats feel
+            // like the same surface.
             Button {
                 send(inputText)
             } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 30))
-                    .foregroundStyle(canSend ? Color.blue : Color.secondary.opacity(0.4))
-                    .symbolRenderingMode(.hierarchical)
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(canSend ? Color.white : Color.secondary)
+                    .frame(width: 44, height: 44)
+                    .glassEffect(
+                        canSend
+                            ? .regular.tint(.blue.opacity(0.85)).interactive()
+                            : .regular.interactive(),
+                        in: Circle()
+                    )
             }
             .buttonStyle(.plain)
             .disabled(!canSend)
+            .animation(.easeInOut(duration: 0.2), value: canSend)
         }
         .padding(.horizontal)
         .padding(.bottom, 10)

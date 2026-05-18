@@ -774,22 +774,28 @@ struct FollowUpChatView: View {
                                 .padding(.horizontal)
                                 .padding(.top, 8)
 
+                            // Intro card + suggested starter questions.
+                            // No auto-fire on appear anymore — the
+                            // previous behavior (which immediately
+                            // sent "Can you summarize this report?")
+                            // was hitting a race where the engine
+                            // wasn't always ready in time, leaving
+                            // the chat hanging on an empty bubble.
+                            // Users now see a clear "what this is"
+                            // header + tappable starter questions and
+                            // pick whichever they want.
+                            if messages.isEmpty {
+                                emptyStateHeader
+                                    .padding(.horizontal)
+
+                                starterChips
+                                    .padding(.horizontal)
+                                    .padding(.bottom, 4)
+                            }
+
                             ForEach(messages) { message in
                                 messageRow(message: message)
                                     .id(message.id)
-                            }
-
-                            if isThinking {
-                                HStack(spacing: 10) {
-                                    Image(systemName: "brain.head.profile")
-                                        .font(.system(size: 18))
-                                        .foregroundStyle(.blue)
-                                    ProgressView()
-                                    Text("Thinking…")
-                                        .font(.subheadline)
-                                        .foregroundStyle(.secondary)
-                                }
-                                .padding(.horizontal)
                             }
                         }
                         .padding(.vertical)
@@ -829,17 +835,88 @@ struct FollowUpChatView: View {
                     }
                 }
             }
-            .onAppear {
-                if detectedTable != nil {
-                    inputText = "Can you walk me through this table and explain what each value means in plain language?"
-                } else if isWholeDocumentAsk {
-                    inputText = "Can you summarize this report in plain language?"
-                } else {
-                    inputText = "What does this mean in simple terms? Is this normal?"
+        }
+    }
+
+    /// Same shape language as TrendsChatView's intro card. Explains
+    /// what this chat does so users don't have to guess.
+    private var emptyStateHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.yellow)
+                Text("Asks about your selected text")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+            }
+            Text("Localabs answers questions about the part of the lab report you highlighted, with the rest of your scan, profile, and recent Apple Health data as background context.")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    /// Starter questions shaped to the user's selection — table,
+    /// whole document, or arbitrary text — so the first prompt is
+    /// always something they could plausibly want to ask.
+    private var starterChips: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Try asking:")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .tracking(0.5)
+
+            VStack(spacing: 6) {
+                ForEach(starterQuestions, id: \.self) { question in
+                    Button {
+                        inputText = question
+                        sendMessage()
+                    } label: {
+                        HStack {
+                            Text(question)
+                                .font(.system(size: 13))
+                                .foregroundStyle(.primary)
+                                .multilineTextAlignment(.leading)
+                            Spacer()
+                            Image(systemName: "arrow.up.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.blue)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
                 }
-                sendMessage()
             }
         }
+    }
+
+    private var starterQuestions: [String] {
+        if detectedTable != nil {
+            return [
+                "Walk me through this table — what does each value mean?",
+                "Which values here are outside the normal range?",
+                "How do these results connect to my recent Apple Health data?"
+            ]
+        }
+        if isWholeDocumentAsk {
+            return [
+                "Summarize this report in plain language.",
+                "What are the top 3 things I should ask my doctor about?",
+                "Are there any concerning values I should know about?"
+            ]
+        }
+        return [
+            "What does this mean in simple terms? Is this normal?",
+            "How does this value relate to my health profile?",
+            "Should I bring this up with my doctor?"
+        ]
     }
 
     @ViewBuilder
@@ -886,7 +963,32 @@ struct FollowUpChatView: View {
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
+    @ViewBuilder
     private func messageRow(message: ChatMessage) -> some View {
+        // Empty streaming AI bubble = "waiting for first token".
+        // Show the iMessage-style typing dots inline so the user
+        // gets the familiar "they're typing" affordance, not a
+        // generic spinner. Replaced the old separate "Thinking…"
+        // row that used to render above the messages — putting
+        // the indicator inside the bubble keeps spatial continuity
+        // when the dots flip to actual content.
+        if message.role == .ai && message.isStreaming && message.content.isEmpty {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "brain.head.profile")
+                    .font(.system(size: 20))
+                    .foregroundStyle(.blue)
+                    .padding(.top, 6)
+                TypingDots()
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal)
+        } else {
+            chatBubble(for: message)
+        }
+    }
+
+    private func chatBubble(for message: ChatMessage) -> some View {
         HStack(alignment: .top, spacing: 10) {
             if message.role == .ai {
                 Image(systemName: "brain.head.profile")
@@ -931,19 +1033,23 @@ struct FollowUpChatView: View {
                 .padding(.vertical, 12)
                 .glassEffect(.regular, in: Capsule())
 
-            // Explicit gray (idle) → blue (active) so the send button is
-            // always legible. The previous .glassProminent style rendered
-            // the disabled state nearly transparent against the chat
-            // background.
+            // Liquid glass send button. Active state tints blue so
+            // it reads as "primary action" while still feeling like
+            // glass; disabled state drops the tint so it dims but
+            // stays in the glass family.
             Button {
                 sendMessage()
             } label: {
                 Image(systemName: "arrow.up")
                     .font(.system(size: 18, weight: .bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(canSend ? Color.white : Color.secondary)
                     .frame(width: 44, height: 44)
-                    .background(canSend ? Color.blue : Color.gray.opacity(0.45))
-                    .clipShape(Circle())
+                    .glassEffect(
+                        canSend
+                            ? .regular.tint(.blue.opacity(0.85)).interactive()
+                            : .regular.interactive(),
+                        in: Circle()
+                    )
             }
             .disabled(!canSend)
             .animation(.easeInOut(duration: 0.2), value: canSend)
