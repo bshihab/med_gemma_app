@@ -602,18 +602,102 @@ final class InferenceEngine: ObservableObject {
 
     enum AnalysisMode { case lab, weekly }
 
+    /// Cheap, fully-deterministic pre-flight: does the OCR text look
+    /// like it came from a lab report at all? This exists because the
+    /// inference prompt is structured to ALWAYS emit a 5-section lab
+    /// report — if we hand it Xcode screenshot OCR or a random photo,
+    /// the model fills the sections from whatever lab context it has
+    /// in its RAG window, which reads to the user as the model
+    /// fabricating results. The honest behavior is to refuse early.
+    ///
+    /// The check is permissive: any one of (a) a recognizable medical
+    /// unit like "mg/dL" / "mmol/L", (b) two or more common lab terms
+    /// like "cholesterol" / "hemoglobin" / "reference range", or (c)
+    /// a numeric range with a unit ("100-200 mg/dL") is enough. Real
+    /// lab reports will trivially pass; non-medical images won't.
+    private static func looksLikeLabReport(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+
+        // Medical units. The "/" in things like mg/dL is rare outside
+        // of medical content, so even one hit is a strong signal.
+        let labUnits = [
+            "mg/dl", "mmol/l", "ng/ml", "meq/l", "pg/ml", "iu/l", "u/l",
+            "miu/l", "g/dl", "mg/l", "ng/dl", "miu/ml", "mcg/dl", "μg/dl",
+            "10^3", "10^9", "10^6", "k/ul", "k/μl", "/μl", "mmhg",
+            "cells/mm", "x10^", "fl/cell"
+        ]
+        let unitHits = labUnits.reduce(0) { $0 + (lowered.contains($1) ? 1 : 0) }
+
+        // Lab-specific vocabulary. Two or more hits combined ≈ "this
+        // page is talking about labs even without a unit string."
+        let labTerms = [
+            "reference range", "normal range", "lab result", "test result",
+            "specimen", "ordering provider", "ordering physician",
+            "collection date", "report date", "lab id", "mrn",
+            "lipid panel", "cholesterol", "hdl", "ldl", "triglycerides",
+            "glucose", "hemoglobin", "hba1c", "a1c", "creatinine", "bun",
+            "sodium", "potassium", "chloride", "calcium", "magnesium",
+            "phosphate", "vitamin d", "vitamin b12", "ferritin", "iron",
+            "thyroid", "tsh", "t3", "t4", "white blood cell", "red blood cell",
+            "platelet", "wbc", "rbc", "albumin", "bilirubin",
+            "alkaline phosphatase", "alt", "ast",
+            "psa", "estradiol", "testosterone", "cortisol", "insulin",
+            "c-reactive", "crp", "esr", "complete blood count",
+            "cbc", "metabolic panel", "lab report", "blood test",
+            "urinalysis", "biopsy", "pathology"
+        ]
+        let termHits = labTerms.reduce(0) { $0 + (lowered.contains($1) ? 1 : 0) }
+
+        // Numeric-range-with-unit patterns ("100-200 mg/dL", "<200
+        // mg/dL", ">=240 mg/dL"). Lab reference ranges almost always
+        // print like this, while general-purpose text almost never
+        // does.
+        let rangePattern = #"(?i)(\d+\s*-\s*\d+|<\s*\d+|>=?\s*\d+)\s*(mg|mmol|ng|meq|pg|iu|u|g|mcg)"#
+        let rangeHits: Int = {
+            guard let regex = try? NSRegularExpression(pattern: rangePattern) else { return 0 }
+            let nsRange = NSRange(text.startIndex..., in: text)
+            return regex.numberOfMatches(in: text, range: nsRange)
+        }()
+
+        // Combine the signals. Single strong hits (unit OR range
+        // pattern) pass; for the term-only path we require two hits
+        // to defend against false positives on a single mention
+        // (e.g. someone's grocery list saying "cholesterol-free").
+        return unitHits >= 1 || rangeHits >= 1 || termHits >= 2
+    }
+
     /// `continueFromPartial`, when non-nil, primes the prompt with
     /// the partial model output the user paused mid-stream. The
     /// model picks up generating tokens *after* the partial instead
     /// of restarting from scratch — that's what makes Resume feel
     /// like continuation rather than a fresh re-run.
     private func runInference(extractedText: String, healthMetrics: HealthKitService.HealthMetrics, mode: AnalysisMode, continueFromPartial: String? = nil) async -> StructuredReport {
+        // Hard refuse on obviously-not-a-lab-report scans BEFORE we
+        // ever hit the LLM. Skipping inference avoids both the
+        // 30+-second wait and the hallucination risk of forcing the
+        // model to write lab sections with no lab data to anchor on.
+        // The Weekly mode legitimately runs without OCR content, so
+        // it bypasses this check.
+        if mode == .lab, !Self.looksLikeLabReport(extractedText) {
+            return StructuredReport(
+                patientSummary: "⚠️ This image doesn't look like a lab report.\n\nLocalabs couldn't find any lab values, reference ranges, or medical findings in the scanned image. To avoid invented results, the analysis was skipped.\n\n- Try scanning a printed lab result that shows test names, your values, and reference ranges (e.g. \"180 mg/dL\", \"normal range 100–200\").\n- Multi-page scans? Make sure each page actually contains the table of results.\n- If you DID scan a lab report and this message shows up, the OCR may have failed — try retaking with better lighting and the page flat.",
+                rawText: extractedText
+            )
+        }
+
         let profile = UserProfile.load()
         let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 3)
 
         let behaviorPrompt = mode == .weekly
             ? "The user is requesting their weekly health check-in review. Analyze their Apple Health data provided below."
-            : "The user just scanned a lab report. The following text was extracted using Apple's VisionKit OCR."
+            : """
+            The user just scanned what should be a lab report. The text below was extracted using Apple's VisionKit OCR.
+
+            CRITICAL RULES BEFORE YOU ANSWER:
+            - Base your analysis ONLY on values that appear in the OCR text below. Do NOT carry numbers, findings, or diagnoses over from the user's prior reports listed under "Past lab reports" — those are background context for tone and personalization, NOT data you can substitute when the current scan is sparse or unclear.
+            - If the OCR text does not contain any lab values, reference ranges, or medical findings, your PATIENT SUMMARY must say: "⚠️ This image doesn't appear to contain lab report content I can analyze. Please retake with a printed lab result." Then leave the other 4 sections empty. Do NOT invent values.
+            - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable.
+            """
 
         let prompt = """
         <start_of_turn>user
