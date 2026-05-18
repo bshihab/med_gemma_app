@@ -392,13 +392,17 @@ final class InferenceEngine: ObservableObject {
             return report
         }
 
-        // Only persist if the run actually completed. A user-paused
-        // run stays in memory via pendingResumeReport so Resume can
-        // pick it up — but Discard then leaves no trace in History.
-        // The previous isIncomplete-based gate didn't catch pauses
-        // that happened after some sections had streamed, because the
-        // partial looked "complete" by the heuristic.
-        if !isInferenceCancelled {
+        // Only persist a report that actually finished. Three things
+        // must hold:
+        //   - the run wasn't cancelled (pause / background)
+        //   - all 5 sections came through (no maxTokens truncation)
+        //   - it isn't the non-health rejection sentinel
+        // The previous gate only checked isInferenceCancelled, so a
+        // multi-page run that hit the output-token cap mid-section
+        // would still get saved as a half-empty "completed" report.
+        // That was the bug behind "I scan 3 medical records, it
+        // returns me to the upload screen but the scan is in history."
+        if !isInferenceCancelled && !report.isIncomplete && !report.wasRejectedAsNonHealth {
             LocalStorageService.shared.saveReport(report)
         }
         if isInferenceCancelled || report.isIncomplete { pendingResumeReport = report }
@@ -479,7 +483,10 @@ final class InferenceEngine: ObservableObject {
                 return report
             }
 
-            if !isInferenceCancelled {
+            // Same triple-gate as analyzeImages: skip persistence for
+            // any run that didn't make it to all 5 sections, so a
+            // truncated multi-page PDF doesn't end up in History.
+            if !isInferenceCancelled && !report.isIncomplete && !report.wasRejectedAsNonHealth {
                 LocalStorageService.shared.saveReport(report)
             }
             if isInferenceCancelled || report.isIncomplete { pendingResumeReport = report }
@@ -734,10 +741,13 @@ final class InferenceEngine: ObservableObject {
 
     /// Exact phrase the analysis prompt instructs the model to emit
     /// when the OCR text doesn't actually contain analyzable lab
-    /// content. Defined here so the prompt and the stream-watcher
-    /// reference the SAME string — drift between the two would mean
-    /// the watcher never fires, defeating the early-stop.
-    static let midStreamRefusalSnippet = "doesn't appear to contain lab report content"
+    /// content. Anchored on the leading ⚠️ + "This image" so it
+    /// can't false-match a real multi-page analysis that happens to
+    /// say something like "the second page doesn't appear to contain
+    /// lab values for triglycerides…" — the model rarely emits ⚠️
+    /// unprompted, which makes this snippet effectively unique to
+    /// our refusal output.
+    static let midStreamRefusalSnippet = "⚠️ This image doesn't appear to contain lab report content"
 
     /// Builds the canonical "we refused this scan" report. The first
     /// line carries `nonHealthRejectionMarker` (invisible to the user
@@ -791,7 +801,7 @@ final class InferenceEngine: ObservableObject {
 
             CRITICAL RULES BEFORE YOU ANSWER:
             - Base your analysis ONLY on values that appear in the OCR text below. You have NO access to the user's prior lab reports — do not mention or imply any prior findings, do not say things like "consistent with your earlier panel," and do not carry numbers or diagnoses from anywhere else. If a fact isn't in the OCR text, it doesn't exist for this analysis.
-            - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your VERY FIRST line of PATIENT SUMMARY must be exactly: "⚠️ This image \(Self.midStreamRefusalSnippet) I can analyze. Please retake with a printed lab result." Then STOP — do not write anything else, do not fill the other sections. The app watches for that exact phrase and will halt generation when it sees it.
+            - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your VERY FIRST line of PATIENT SUMMARY must be exactly: "\(Self.midStreamRefusalSnippet) I can analyze. Please retake with a printed lab result." Then STOP — do not write anything else, do not fill the other sections. The app watches for that exact phrase (including the ⚠️) and will halt generation when it sees it.
             - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable. Never paper over unreadable values with plausible-sounding text.
             """
 
@@ -860,7 +870,14 @@ final class InferenceEngine: ObservableObject {
             collected = ""
             streamingText = ""
         }
-        let maxTokens = 1000
+        // Bumped from 1000 to 1500 so multi-page scans (3+ pages
+        // produce ~1100-1400 tokens of structured output) finish
+        // every section instead of getting truncated mid-MEDICATION
+        // NOTES. The model still stops the moment it emits the
+        // end-of-turn marker, so single-page reports don't pay any
+        // extra latency for the bigger ceiling — only multi-page runs
+        // that actually need the headroom.
+        let maxTokens = 1500
         var tokenCount = 0
         // Surface prompt size in the Xcode console — useful for diagnosing
         // tokenize-overflow / slow-decode complaints. Approximate token

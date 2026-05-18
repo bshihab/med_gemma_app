@@ -40,6 +40,20 @@ struct UserProfile: Codable {
         UserDefaults.standard.removeObject(forKey: storageKey)
     }
 
+    /// Whether the user has supplied enough demographics for the
+    /// Trends tab to attach Typical / Borderline / Outside-typical
+    /// labels to their metrics. Both age and biological sex are
+    /// required: population norms for resting HR, HRV, sleep, walking
+    /// speed, etc. shift meaningfully with both, so colouring a status
+    /// without them would be at best generic and at worst misleading
+    /// (e.g. "60–80 bpm typical" is for adults in general; an athlete
+    /// in their 20s vs. a 70-year-old read those numbers differently).
+    /// Users who skip these fields see no status pills at all.
+    var hasDemographicsForStatusLabels: Bool {
+        !age.trimmingCharacters(in: .whitespaces).isEmpty
+            && !biologicalSex.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
     /// Formatted bullet list of every onboarding field that's been
     /// filled in. Inserted into both the lab-analysis prompt and the
     /// follow-up chat prompt so the model has the user's age, sex,

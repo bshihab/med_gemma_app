@@ -25,12 +25,20 @@ struct ScanView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                // ScanView is the home of any in-flight or paused
-                // analysis. The processing view stays on screen for
-                // both running and paused states; only true idle
-                // (nothing in flight, nothing paused) flips back to
-                // the upload buttons.
-                if engine.isProcessing || engine.isPaused {
+                // ScanView is the home of any in-flight, paused, or
+                // truncated-and-waiting-to-resume analysis. The
+                // processing view stays on screen for all three states
+                // so the Resume / Discard controls are reachable; only
+                // genuine idle (nothing in flight, nothing parked)
+                // flips back to the upload buttons.
+                //
+                // `pendingResumeReport != nil` is what catches a
+                // multi-page scan that hit the output-token ceiling
+                // mid-stream: not paused, not processing, but also
+                // not "done" — without this, the user would drop
+                // straight to upload view even though there's a
+                // half-finished report waiting to be resumed.
+                if engine.isProcessing || engine.isPaused || engine.pendingResumeReport != nil {
                     processingView
                         .transition(.opacity)
                 } else {
@@ -40,6 +48,7 @@ struct ScanView: View {
             }
             .animation(.easeInOut(duration: 0.3), value: engine.isProcessing)
             .animation(.easeInOut(duration: 0.3), value: engine.isPaused)
+            .animation(.easeInOut(duration: 0.3), value: engine.pendingResumeReport != nil)
             .navigationTitle("")
             .fullScreenCover(isPresented: $showCamera) {
                 // VNDocumentCameraViewController is the same scanner
@@ -186,15 +195,34 @@ struct ScanView: View {
 
     // MARK: - Processing (live-fill) view
 
+    /// True when the engine has an analysis the user can pick back up
+    /// — either paused or truncated. Drives the Resume/Discard bottom
+    /// CTAs so the truncation case (multi-page scan that hit the
+    /// output-token ceiling) gets the same recovery affordance the
+    /// paused case has.
+    private var needsResume: Bool {
+        engine.isPaused || engine.pendingResumeReport != nil
+    }
+
+    /// Title shown on the processing card. Differentiates between
+    /// active streaming, an explicit user pause, and a run that ran
+    /// out of token budget — so the user knows which state they're
+    /// in without having to read the body copy.
+    private var processingHeadline: String {
+        if engine.isPaused { return "Paused" }
+        if engine.pendingResumeReport != nil { return "Incomplete" }
+        return "Analyzing"
+    }
+
     private var processingView: some View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(engine.isPaused ? "Paused" : "Analyzing")
+                            Text(processingHeadline)
                                 .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(engine.isPaused ? Color.orange : Color.primary)
+                                .foregroundStyle(needsResume ? Color.orange : Color.primary)
                             Spacer()
                             // Live percentage tied to engine.analysisProgress.
                             // Using monospaced digits keeps it from twitching
@@ -210,12 +238,12 @@ struct ScanView: View {
                             .lineLimit(1)
                     }
 
-                    // Pause toggle while running — flips engine.isPaused,
-                    // freezes the streaming cards in place, and swaps
-                    // the bottom CTAs to Resume + Discard. Hidden while
-                    // already paused (the action moves to the dedicated
-                    // bottom buttons).
-                    if !engine.isPaused {
+                    // Pause toggle only while a run is actively
+                    // streaming. Hidden while paused (action moves to
+                    // the dedicated bottom buttons) AND while we're
+                    // showing a truncated-needs-resume state — there's
+                    // nothing to pause.
+                    if engine.isProcessing && !needsResume {
                         Button {
                             engine.pauseInference()
                         } label: {
@@ -235,7 +263,7 @@ struct ScanView: View {
                 // streaming → final save). Tints orange while paused so
                 // the frozen state reads at a glance.
                 ProgressView(value: engine.analysisProgress)
-                    .tint(engine.isPaused ? .orange : .blue)
+                    .tint(needsResume ? .orange : .blue)
                     .animation(.easeOut(duration: 0.25), value: engine.analysisProgress)
             }
             .padding(16)
@@ -251,12 +279,13 @@ struct ScanView: View {
             // through partial content.
             LiveReportSectionsView(streamingText: engine.streamingText)
                 .padding(.horizontal, 20)
-                .padding(.bottom, engine.isPaused ? 12 : 24)
+                .padding(.bottom, needsResume ? 12 : 24)
 
-            // Resume + Discard pinned to the bottom of the paused
-            // screen. Resume is the prominent CTA; Discard is a small
-            // destructive link so accidental taps stay safe.
-            if engine.isPaused {
+            // Resume + Discard pinned to the bottom of the recoverable
+            // states (paused OR truncated mid-stream). Resume is the
+            // prominent CTA; Discard is a small destructive link so
+            // accidental taps stay safe.
+            if needsResume {
                 VStack(spacing: 10) {
                     Button {
                         Task { await engine.resumeFromPaused() }

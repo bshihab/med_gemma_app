@@ -427,7 +427,15 @@ struct TrendsView: View {
 
     private func metricCard(label: String, series: HealthKitService.MetricSeries, tint: Color) -> some View {
         let context = HealthInsights.clinicalContext(for: label)
-        let status = context?.interpret(series.average) ?? .unknown
+        // Status pills are only meaningful when we know the user's
+        // age + biological sex — population-norm bands shift with
+        // both, and showing a generic "Borderline" to someone whose
+        // demographics we don't know would be at best vague and at
+        // worst misleading. Force .unknown (which hides the pill)
+        // when those fields are missing from Profile.
+        let profile = UserProfile.load()
+        let rawStatus = context?.interpret(series.average) ?? .unknown
+        let status: HealthInsights.Status = profile.hasDemographicsForStatusLabels ? rawStatus : .unknown
         let delta = deltaString(for: series)
         let isCumulative = HealthInsights.isCumulativeMetric(label)
 
@@ -763,7 +771,13 @@ struct MetricDetailView: View {
 
     private var headlineCard: some View {
         let context = HealthInsights.clinicalContext(for: label)
-        let status = context?.interpret(series.average) ?? .unknown
+        // Match TrendsView.metricCard: status pill only renders when
+        // the user has supplied age + biological sex. Otherwise the
+        // population-norm interpretation isn't tailored enough to be
+        // useful and we suppress the label entirely.
+        let profile = UserProfile.load()
+        let rawStatus = context?.interpret(series.average) ?? .unknown
+        let status: HealthInsights.Status = profile.hasDemographicsForStatusLabels ? rawStatus : .unknown
         return VStack(alignment: .leading, spacing: 14) {
             // "AVERAGE" pill above the value, Apple Health style.
             Text(isCumulative ? "DAILY AVERAGE" : "AVERAGE")
@@ -955,40 +969,66 @@ struct MetricDetailView: View {
     // MARK: Status legend (what Typical / Borderline / Outside mean)
 
     /// Three-row key explaining what each status color actually means
-    /// before the user reads their own status pill. Removes the "wait
-    /// what does borderline mean here?" ambiguity.
+    /// — but only when the user has supplied demographics. Without
+    /// age + biological sex we don't show status pills (they'd be
+    /// generic and misleading), so the legend pivots to an inline
+    /// "add your age + sex to enable status labels" prompt instead.
+    @ViewBuilder
     private var statusLegendCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Text("WHAT THE STATUS LABELS MEAN")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .foregroundStyle(.secondary)
-                    .tracking(1.2)
-                Spacer()
-            }
+        let profile = UserProfile.load()
+        if profile.hasDemographicsForStatusLabels {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(HealthInsights.statusLegend().enumerated()), id: \.offset) { _, item in
-                    HStack(alignment: .top, spacing: 10) {
-                        Circle()
-                            .fill(item.color)
-                            .frame(width: 8, height: 8)
-                            .padding(.top, 6)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.label)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(item.color)
-                            Text(item.description)
-                                .font(.system(size: 12, design: .rounded))
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Text("WHAT THE STATUS LABELS MEAN")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .tracking(1.2)
+                    Spacer()
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(HealthInsights.statusLegend().enumerated()), id: \.offset) { _, item in
+                        HStack(alignment: .top, spacing: 10) {
+                            Circle()
+                                .fill(item.color)
+                                .frame(width: 8, height: 8)
+                                .padding(.top, 6)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.label)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(item.color)
+                                Text(item.description)
+                                    .font(.system(size: 12, design: .rounded))
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        } else {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "person.crop.circle.badge.plus")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.blue)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Add your age + biological sex to see status labels")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Typical / Borderline / Outside-typical labels need both fields — population norms shift with each. Set them under Profile → Personal Health.")
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(18)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
     }
 
     // MARK: Clinical context
