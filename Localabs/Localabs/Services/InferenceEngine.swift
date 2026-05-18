@@ -802,6 +802,10 @@ final class InferenceEngine: ObservableObject {
             CRITICAL RULES BEFORE YOU ANSWER:
             - Base your analysis ONLY on values that appear in the OCR text below. You have NO access to the user's prior lab reports — do not mention or imply any prior findings, do not say things like "consistent with your earlier panel," and do not carry numbers or diagnoses from anywhere else. If a fact isn't in the OCR text, it doesn't exist for this analysis.
             - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your VERY FIRST line of PATIENT SUMMARY must be exactly: "\(Self.midStreamRefusalSnippet) I can analyze. Please retake with a printed lab result." Then STOP — do not write anything else, do not fill the other sections. The app watches for that exact phrase (including the ⚠️) and will halt generation when it sees it.
+            - REFUSAL PHRASING IS ONLY FOR THE WHOLE-IMAGE-EMPTY CASE. Never use phrases like "this image doesn't appear to contain", "no lab report content", "cannot analyze this image", "not enough medical data", or any variation, INSIDE any of the 5 sections. If a SPECIFIC section has nothing to populate from the OCR (e.g. MEDICATION NOTES on a report that lists no medications, or QUESTIONS FOR YOUR DOCTOR when the report is unambiguous), write a single short, neutral bullet describing the absence — for example:
+                MEDICATION NOTES section with no meds → "- No medications are listed in this report."
+                MEDICAL GLOSSARY section with no jargon → "- No specialized terms in this report needed defining."
+              Do NOT write "this image doesn't contain..." anywhere except as the very first line of PATIENT SUMMARY in the whole-image-empty case described above.
             - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable. Never paper over unreadable values with plausible-sounding text.
             """
 
