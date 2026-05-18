@@ -811,4 +811,65 @@ final class InferenceEngine: ObservableObject {
 
         return context.predict(prompt: prompt, maxTokens: 400)
     }
+
+    /// Streams the answer to a Trends-tab question. Different prompt
+    /// shape from askFollowUp: there's no specific lab-report
+    /// excerpt or highlighted-text selection — the user is asking
+    /// about their broader health trends, so the system block leads
+    /// with HealthKit metrics + RAG over past reports + profile. The
+    /// model is told to synthesize across all three when answering.
+    func askAboutTrends(
+        question: String,
+        history: [ChatTurn] = [],
+        healthMetrics: HealthKitService.HealthMetrics
+    ) -> AsyncStream<String> {
+        let profile = UserProfile.load()
+        let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 5)
+
+        let systemHeader = """
+        You are an empathetic medical assistant. The user is asking about their broader health trends — they're NOT asking about a specific lab report, they're asking about how their day-to-day health (activity, sleep, vitals from Apple Health) interacts with their past lab results and their personal health profile.
+
+        User's Personal Health Context:
+        \(profile.promptContextBullets)
+
+        User's Apple Health data (30-day averages):
+        - Resting HR: \(healthMetrics.avgRestingHR.map { "\($0) bpm" } ?? "Unknown")
+        - Sleep: \(healthMetrics.avgSleepHours.map { "\($0) hours" } ?? "Unknown")
+        - HRV: \(healthMetrics.avgHRV.map { "\($0) ms" } ?? "Unknown")
+        - Daily steps: \(healthMetrics.avgSteps.map { String(format: "%.0f", $0) } ?? "Unknown")
+        - Daily walking/running: \(healthMetrics.avgWalkingDistanceMiles.map { String(format: "%.2f mi", $0) } ?? "Unknown")
+        - Walking speed: \(healthMetrics.avgWalkingSpeedMPH.map { String(format: "%.2f mph", $0) } ?? "Unknown")
+        - Daily exercise minutes: \(healthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")\(ragContext)
+
+        How to answer:
+        - Synthesize across the user's profile, recent Health data, AND past lab reports. Connect the dots — e.g. "your HRV trend lined up with the elevated cortisol in your March panel" — when you can.
+        - Suggest concrete, actionable lifestyle moves the user could discuss with their doctor: sleep targets, walking minutes, dietary shifts.
+        - Do NOT prescribe medications, dosages, or specific medical treatments. That's the doctor's job.
+        - Flag anything that warrants doctor follow-up explicitly with a ⚠️ if you spot it.
+        - Format with **bold** for medical terms / lab values / numbers, *italics* sparingly, bullet points for short lists, and Markdown tables only when comparing 3+ values across categories.
+        - Keep prose answers to 3–6 sentences unless the user explicitly asks for more depth.
+        """
+
+        var prompt = ""
+        if let firstTurn = history.first, firstTurn.isUser {
+            prompt += "<start_of_turn>user\n\(systemHeader)\n\nTheir first question: \"\(firstTurn.content)\"\n<end_of_turn>\n"
+            for turn in history.dropFirst() {
+                let role = turn.isUser ? "user" : "model"
+                prompt += "<start_of_turn>\(role)\n\(turn.content)\n<end_of_turn>\n"
+            }
+            prompt += "<start_of_turn>user\n\(question)\n<end_of_turn>\n<start_of_turn>model\n"
+        } else {
+            prompt += "<start_of_turn>user\n\(systemHeader)\n\nTheir question: \"\(question)\"\n<end_of_turn>\n<start_of_turn>model\n"
+        }
+
+        guard let context = llamaContext else {
+            let model = selectedModel
+            return AsyncStream { continuation in
+                continuation.yield("Localabs isn't loaded yet. Download \(model.displayName) in Profile to ask about your trends.")
+                continuation.finish()
+            }
+        }
+
+        return context.predict(prompt: prompt, maxTokens: 500)
+    }
 }

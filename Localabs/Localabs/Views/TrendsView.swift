@@ -18,6 +18,10 @@ struct TrendsView: View {
     /// Nil means no sheet open. Wrapped in an Identifiable struct so
     /// SwiftUI's .sheet(item:) can present it.
     @State private var presentedMetric: PresentedMetric?
+    /// Drives the "Ask Localabs about your trends" chat sheet.
+    /// Snapshot captured at present-time so the chat sees the same
+    /// data the user was looking at.
+    @State private var showTrendsChat: Bool = false
 
     struct PresentedMetric: Identifiable {
         var id: String { label }
@@ -48,6 +52,9 @@ struct TrendsView: View {
                         contextHeader
                             .padding(.horizontal)
 
+                        askLocalabsCTA
+                            .padding(.horizontal)
+
                         rangePicker
                             .padding(.horizontal)
 
@@ -75,6 +82,16 @@ struct TrendsView: View {
                 // sticks to the value it had at first init.
                 hasRequestedHealth = HealthKitService.shared.hasRequestedAuthorization
                 await refresh()
+            }
+            .sheet(isPresented: $showTrendsChat) {
+                // Capture the current snapshot's HealthMetrics at
+                // present-time so the chat doesn't lag behind if
+                // the snapshot refreshes mid-conversation. If the
+                // user hasn't loaded any data yet we pass an empty
+                // struct — the model just has profile + RAG to
+                // work with.
+                TrendsChatView(healthMetrics: makeHealthMetricsForChat())
+                    .environmentObject(engine)
             }
             .sheet(item: $presentedMetric) { metric in
                 MetricDetailView(
@@ -163,6 +180,73 @@ struct TrendsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    // MARK: - Ask Localabs CTA
+
+    /// Prominent gradient card pinned right under the context
+    /// header. Same shape language as Dashboard's "Ask More About
+    /// Your Scan" card so users recognize the pattern (big tappable
+    /// CTA → chat sheet). Tap presents TrendsChatView, scoped to
+    /// the current snapshot.
+    private var askLocalabsCTA: some View {
+        Button {
+            showTrendsChat = true
+        } label: {
+            HStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "sparkle.magnifyingglass")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .symbolEffect(.pulse, options: .repeat(.continuous))
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Ask Localabs about your trends")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundStyle(.white)
+                    Text("Synthesizes Health data + past scans + your profile")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.88))
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.85))
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(
+                    colors: [Color.blue, Color.blue.opacity(0.82)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .shadow(color: Color.blue.opacity(0.28), radius: 12, y: 5)
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Pulls the current snapshot's averages into the smaller
+    /// `HealthMetrics` shape the chat / inference engine expects.
+    /// Returns an empty struct when there's no snapshot yet — the
+    /// chat will still work, the model just has profile + RAG to
+    /// answer from.
+    private func makeHealthMetricsForChat() -> HealthKitService.HealthMetrics {
+        guard let s = snapshot else { return HealthKitService.HealthMetrics() }
+        return HealthKitService.HealthMetrics(
+            avgRestingHR: s.restingHR?.average,
+            avgSleepHours: s.sleepHours?.average,
+            avgHRV: s.hrv?.average,
+            avgSteps: s.steps?.average,
+            avgWalkingDistanceMiles: s.walkingRunningDistance?.average,
+            avgWalkingSpeedMPH: s.walkingSpeed?.average,
+            avgExerciseMinutes: s.exerciseMinutes?.average
+        )
     }
 
     // MARK: - Cards

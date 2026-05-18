@@ -32,11 +32,12 @@ struct DashboardView: View {
                 dashboardContent
             }
         }
-        .confirmationDialog(
-            "Regenerate translation?",
-            isPresented: $showRegenConfirm,
-            titleVisibility: .visible
-        ) {
+        // .alert (centered modal) instead of .confirmationDialog
+        // (bottom action sheet) so the popup reads as anchored to
+        // the tap — confirmationDialog on iPhone always slides up
+        // from the bottom of the screen by iOS convention, which
+        // felt disconnected from the regenerate button.
+        .alert("Regenerate translation?", isPresented: $showRegenConfirm) {
             Button("Regenerate", role: .destructive) {
                 Task { await regenerate() }
             }
