@@ -2,10 +2,14 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 import UniformTypeIdentifiers
+import VisionKit
 
 struct ScanView: View {
     @EnvironmentObject var engine: InferenceEngine
-    @State private var selectedImage: UIImage?
+    /// Pages captured from the document camera, in scan order. Populated
+    /// by `DocumentCameraView` once the user taps Save in the native
+    /// scanner UI; the picker can deliver one OR many pages.
+    @State private var capturedPages: [UIImage] = []
     @State private var report: StructuredReport?
     @State private var showCamera = false
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -38,7 +42,13 @@ struct ScanView: View {
             .animation(.easeInOut(duration: 0.3), value: engine.isPaused)
             .navigationTitle("")
             .fullScreenCover(isPresented: $showCamera) {
-                NativeCameraView(image: $selectedImage)
+                // VNDocumentCameraViewController is the same scanner
+                // Apple Notes and Files use: native multi-page capture,
+                // automatic edge detection, perspective correction, and
+                // a Save / Retake flow that's already familiar to the
+                // user. Returns one OR many pages as UIImage in scan
+                // order — no need for our own multi-shot wrapper.
+                DocumentCameraView(pages: $capturedPages)
                     .ignoresSafeArea()
             }
             .sheet(isPresented: $showPDFPicker) {
@@ -75,8 +85,8 @@ struct ScanView: View {
             .onChange(of: pickerItems) { _, newItems in
                 handlePickerItemsChange(newItems)
             }
-            .onChange(of: selectedImage) { _, newImage in
-                handleCameraImageChange(newImage)
+            .onChange(of: capturedPages) { _, pages in
+                handleCapturedPagesChange(pages)
             }
             .navigationDestination(isPresented: $navigateToDashboard) {
                 if let report = report {
@@ -121,7 +131,12 @@ struct ScanView: View {
                         Button {
                             requestCameraAndOpen()
                         } label: {
-                            Label("Open Camera", systemImage: "camera.fill")
+                            // Reframed as "Scan Document" so users know
+                            // the camera supports multi-page capture in
+                            // one session — matches the document-scanner
+                            // UX (same one Notes uses) the button now
+                            // opens.
+                            Label("Scan Document", systemImage: "doc.viewfinder.fill")
                                 .font(.system(size: 17, weight: .semibold))
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
@@ -265,7 +280,7 @@ struct ScanView: View {
                         engine.discardPausedAnalysis()
                         report = nil
                         pickerItems = []
-                        selectedImage = nil
+                        capturedPages = []
                         navigateToDashboard = false
                     } label: {
                         Text("Discard analysis")
@@ -321,14 +336,20 @@ struct ScanView: View {
         }
     }
 
-    /// Single-shot camera path. Same pipeline as multi-photo — the camera
-    /// just only ever produces one image at a time.
-    private func handleCameraImageChange(_ newImage: UIImage?) {
-        guard let image = newImage else { return }
+    /// Multi-page camera path. `VNDocumentCameraViewController` lets
+    /// the user capture multiple pages in one session (each page gets
+    /// auto-edge-detected and perspective-corrected); on Save we get
+    /// the full `[UIImage]` array. Same downstream pipeline as the
+    /// photo picker — analyzeImages handles 1-to-N pages identically.
+    private func handleCapturedPagesChange(_ pages: [UIImage]) {
+        guard !pages.isEmpty else { return }
         Task {
-            let result = await engine.analyzeImages([image])
+            let result = await engine.analyzeImages(pages)
             handleAnalysisResult(result)
-            selectedImage = nil
+            // Clear after the await returns so re-opening the scanner
+            // starts from an empty buffer. Done on MainActor implicitly
+            // because we're in an @State-bound async context.
+            capturedPages = []
         }
     }
 
@@ -627,38 +648,59 @@ struct PDFDocumentPicker: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Apple's Native Camera UI (UIImagePickerController)
+// MARK: - Apple's Native Document Scanner (VNDocumentCameraViewController)
 
-struct NativeCameraView: UIViewControllerRepresentable {
-    @Binding var image: UIImage?
+/// Wraps Apple's `VNDocumentCameraViewController` — the same scanner
+/// Notes and Files use. Supports multi-page capture out of the box:
+/// the user can hit the shutter multiple times to add pages, retake
+/// any that came out blurry, then tap **Save** to deliver the full
+/// set as a `[UIImage]`. Edge detection + perspective correction are
+/// built in, so even a phone-held page becomes a clean rectangular
+/// scan without any geometry work on our side.
+///
+/// Replaces the old `NativeCameraView` (UIImagePickerController), which
+/// could only return a single un-corrected photo at a time.
+struct DocumentCameraView: UIViewControllerRepresentable {
+    /// Pages in capture order. Updated from `documentCameraViewController(_:didFinishWith:)`.
+    @Binding var pages: [UIImage]
     @Environment(\.dismiss) var dismiss
 
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController()
-        picker.sourceType = .camera
-        picker.cameraCaptureMode = .photo
-        picker.cameraDevice = .rear
-        picker.allowsEditing = false
-        picker.delegate = context.coordinator
-        return picker
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
     }
 
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+    func updateUIViewController(_ uiViewController: VNDocumentCameraViewController, context: Context) {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
-    class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let parent: NativeCameraView
-        init(_ parent: NativeCameraView) { self.parent = parent }
+    class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+        let parent: DocumentCameraView
+        init(_ parent: DocumentCameraView) { self.parent = parent }
 
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            if let img = info[.originalImage] as? UIImage {
-                parent.image = img
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            // VNDocumentCameraScan exposes pages by index; pull all of
+            // them into an array in scan order so the downstream
+            // pipeline can OCR + save them as a multi-page report.
+            var collected: [UIImage] = []
+            collected.reserveCapacity(scan.pageCount)
+            for i in 0..<scan.pageCount {
+                collected.append(scan.imageOfPage(at: i))
             }
+            parent.pages = collected
             parent.dismiss()
         }
 
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) {
+            parent.dismiss()
+        }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) {
+            // Failures here are typically permission / hardware glitches
+            // — surface a console log and dismiss; ScanView's idle state
+            // takes over.
+            print("[DocumentCameraView] scan failed: \(error.localizedDescription)")
             parent.dismiss()
         }
     }

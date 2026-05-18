@@ -725,7 +725,15 @@ final class InferenceEngine: ObservableObject {
         }
 
         let profile = UserProfile.load()
-        let ragContext = LocalStorageService.shared.buildRAGContext(maxReports: 3)
+        // Past-report RAG context is deliberately NOT included in the
+        // analysis prompt. The lab-report translation is supposed to
+        // be a translation of THIS document and only this document —
+        // letting prior scans bleed in here is what was producing
+        // "your cholesterol is..." text when the current OCR was
+        // partially unreadable. Profile demographics + recent Health
+        // averages are kept because they're THE USER (not a separate
+        // document) and they personalize phrasing without supplying
+        // substitutable lab values.
 
         let behaviorPrompt = mode == .weekly
             ? "The user is requesting their weekly health check-in review. Analyze their Apple Health data provided below."
@@ -733,9 +741,9 @@ final class InferenceEngine: ObservableObject {
             The user just scanned what should be a lab report. The text below was extracted using Apple's VisionKit OCR.
 
             CRITICAL RULES BEFORE YOU ANSWER:
-            - Base your analysis ONLY on values that appear in the OCR text below. Do NOT carry numbers, findings, or diagnoses over from the user's prior reports listed under "Past lab reports" — those are background context for tone and personalization, NOT data you can substitute when the current scan is sparse or unclear.
-            - If the OCR text does not contain any lab values, reference ranges, or medical findings, your PATIENT SUMMARY must say: "⚠️ This image doesn't appear to contain lab report content I can analyze. Please retake with a printed lab result." Then leave the other 4 sections empty. Do NOT invent values.
-            - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable.
+            - Base your analysis ONLY on values that appear in the OCR text below. You have NO access to the user's prior lab reports — do not mention or imply any prior findings, do not say things like "consistent with your earlier panel," and do not carry numbers or diagnoses from anywhere else. If a fact isn't in the OCR text, it doesn't exist for this analysis.
+            - If the OCR text is empty, partially unreadable, or doesn't contain lab values / reference ranges / medical findings, your PATIENT SUMMARY must say: "⚠️ This image doesn't appear to contain lab report content I can analyze. Please retake with a printed lab result." Then leave the other 4 sections empty. Do NOT invent values.
+            - If the OCR is partially legible, analyze only what IS legible and explicitly note in PATIENT SUMMARY which fields were unreadable. Never paper over unreadable values with plausible-sounding text.
             """
 
         let prompt = """
@@ -751,7 +759,7 @@ final class InferenceEngine: ObservableObject {
         - Daily steps (30-day avg): \(healthMetrics.avgSteps.map { String(format: "%.0f", $0) } ?? "Unknown")
         - Daily walking/running distance (30-day avg): \(healthMetrics.avgWalkingDistanceMiles.map { String(format: "%.2f mi", $0) } ?? "Unknown")
         - Walking speed (30-day avg): \(healthMetrics.avgWalkingSpeedMPH.map { String(format: "%.2f mph", $0) } ?? "Unknown")
-        - Daily exercise minutes (30-day avg): \(healthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")\(ragContext)
+        - Daily exercise minutes (30-day avg): \(healthMetrics.avgExerciseMinutes.map { String(format: "%.0f min", $0) } ?? "Unknown")
 
         Lab Report OCR Text:
         "\(extractedText)"
