@@ -72,7 +72,7 @@ final class InferenceEngine: ObservableObject {
         // vanished.
         Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification) {
-                self?.pauseInference()
+                self?.pauseFromBackgroundIfActuallyBackgrounded()
             }
         }
     }
@@ -94,6 +94,26 @@ final class InferenceEngine: ObservableObject {
     /// they could in theory still find it in History.
     func pauseInference() {
         guard isProcessing else { return }
+        cancelInference()
+        isPaused = true
+    }
+
+    /// Background-observer entry point. Same effect as `pauseInference()`
+    /// — but guards against stale notifications. iOS posts
+    /// `didEnterBackgroundNotification` for brief lifecycle blips
+    /// (notification banner pull-down, FaceID prompt, lock-screen peek),
+    /// and the AsyncSequence reading those notifications can deliver
+    /// one *after* we've already returned to foreground. Tapping Resume
+    /// would then immediately re-pause, leaving the user in a loop
+    /// where the Resume button "flickers away and comes back."
+    ///
+    /// Check `UIApplication.shared.applicationState` at the moment of
+    /// handling — that's the authoritative *current* state, not the
+    /// queued notification's. If we're already back to .active, the
+    /// notification is stale and we ignore it.
+    private func pauseFromBackgroundIfActuallyBackgrounded() {
+        guard isProcessing else { return }
+        guard UIApplication.shared.applicationState != .active else { return }
         cancelInference()
         isPaused = true
     }

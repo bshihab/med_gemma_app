@@ -42,6 +42,18 @@ struct ProfileView: View {
             .scrollContentBackground(.hidden)
             .background(.background)
             .navigationTitle("Medical Profile")
+            .onAppear {
+                // Re-load from disk every time the tab becomes
+                // visible. Chat popups can mutate the profile while
+                // ProfileView is off-screen (via UserProfile.apply
+                // + .save()), and SwiftUI's @State only initializes
+                // once — so without this reload the user would tab
+                // over from a chat and see stale data, none of the
+                // accepted suggestions appearing. Field-level
+                // .onChange auto-saves protect any in-progress
+                // edits, so a reload is safe.
+                profile = UserProfile.load()
+            }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView()
             }
