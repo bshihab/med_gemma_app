@@ -16,10 +16,10 @@ struct HistoryView: View {
     @State private var renameTarget: StructuredReport?
     @State private var renameText: String = ""
     /// Single-report delete confirmation (from context menu). Bulk
-    /// delete (from Select-mode toolbar) goes through `bulkDeleteAlert`
-    /// instead so we can show the count in the message.
+    /// delete (from Select-mode toolbar) uses its own bool flag so
+    /// we can present a confirmationDialog with the count.
     @State private var deleteTarget: StructuredReport?
-    @State private var showBulkDeleteAlert = false
+    @State private var showBulkDeleteConfirmation = false
 
     var body: some View {
         NavigationStack {
@@ -45,32 +45,37 @@ struct HistoryView: View {
                         }
                     }
                     if editMode.isEditing {
-                        // Share AND Delete in select mode. Delete is
-                        // gated behind a confirmation alert so a
-                        // mis-tap doesn't wipe a batch of reports.
-                        ToolbarItem(placement: .topBarLeading) {
-                            HStack(spacing: 16) {
-                                Button {
-                                    shareSelected()
-                                } label: {
-                                    Label(
-                                        "Share\(selection.isEmpty ? "" : " (\(selection.count))")",
-                                        systemImage: "square.and.arrow.up"
-                                    )
-                                }
-                                .disabled(selection.isEmpty)
-
-                                Button(role: .destructive) {
-                                    showBulkDeleteAlert = true
-                                } label: {
-                                    Label(
-                                        "Delete\(selection.isEmpty ? "" : " (\(selection.count))")",
-                                        systemImage: "trash"
-                                    )
-                                }
-                                .tint(.red)
-                                .disabled(selection.isEmpty)
+                        // Share and Delete in the BOTTOM toolbar —
+                        // matches Apple's pattern in Photos, Mail,
+                        // Notes, Messages when multi-selecting. The
+                        // bottom bar reads as "actions for the
+                        // selection I'm holding," and Apple anchors
+                        // it there consistently across iOS. Share
+                        // sits leading, Delete trailing, with a
+                        // spacer between so they're not clustered.
+                        ToolbarItemGroup(placement: .bottomBar) {
+                            Button {
+                                shareSelected()
+                            } label: {
+                                Label(
+                                    "Share\(selection.isEmpty ? "" : " (\(selection.count))")",
+                                    systemImage: "square.and.arrow.up"
+                                )
                             }
+                            .disabled(selection.isEmpty)
+
+                            Spacer()
+
+                            Button(role: .destructive) {
+                                showBulkDeleteConfirmation = true
+                            } label: {
+                                Label(
+                                    "Delete\(selection.isEmpty ? "" : " (\(selection.count))")",
+                                    systemImage: "trash"
+                                )
+                            }
+                            .tint(.red)
+                            .disabled(selection.isEmpty)
                         }
                     }
                 }
@@ -102,33 +107,42 @@ struct HistoryView: View {
             } message: { _ in
                 Text("Give this report a short title — what you'll see in History and at the top of the dashboard.")
             }
-            // Single-report delete confirmation (from context menu).
-            .alert(
-                "Delete report?",
+            // Destructive confirmations use confirmationDialog (action
+            // sheet) instead of alert — matches Apple's pattern in
+            // Photos / Notes / Messages, where "Delete?" prompts
+            // slide up from the bottom anchored to the action that
+            // triggered them rather than appearing as a centered
+            // modal.
+            .confirmationDialog(
+                deleteTarget.map { "Delete \"\($0.displayTitle)\"?" } ?? "Delete report?",
                 isPresented: Binding(
                     get: { deleteTarget != nil },
                     set: { presenting in
                         if !presenting { deleteTarget = nil }
                     }
                 ),
+                titleVisibility: .visible,
                 presenting: deleteTarget
             ) { target in
-                Button("Delete", role: .destructive) {
+                Button("Delete Report", role: .destructive) {
                     delete(report: target)
                     deleteTarget = nil
                 }
                 Button("Cancel", role: .cancel) {
                     deleteTarget = nil
                 }
-            } message: { target in
-                Text("\"\(target.displayTitle)\" will be removed from History. This can't be undone.")
+            } message: { _ in
+                Text("This report will be removed from History. This can't be undone.")
             }
-            // Bulk delete confirmation (from Select-mode toolbar).
-            .alert(
+            .confirmationDialog(
                 "Delete \(selection.count) report\(selection.count == 1 ? "" : "s")?",
-                isPresented: $showBulkDeleteAlert
+                isPresented: $showBulkDeleteConfirmation,
+                titleVisibility: .visible
             ) {
-                Button("Delete", role: .destructive) {
+                Button(
+                    "Delete \(selection.count) Report\(selection.count == 1 ? "" : "s")",
+                    role: .destructive
+                ) {
                     deleteSelected()
                 }
                 Button("Cancel", role: .cancel) {}

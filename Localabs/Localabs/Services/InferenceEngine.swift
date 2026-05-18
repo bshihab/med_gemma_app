@@ -61,20 +61,56 @@ final class InferenceEngine: ObservableObject {
 
     private var modelURL: URL { selectedModel.localURL }
 
+    /// True when the app has received `didEnterBackgroundNotification`
+    /// and not yet received `willEnterForegroundNotification`. Replaces
+    /// the previous "check applicationState at notification time"
+    /// approach, which was unreliable: applicationState reads can
+    /// briefly report `.background` during transition moments even
+    /// when the app is on screen, especially during long async work
+    /// like multi-page OCR. Paired notifications give us an
+    /// unambiguous truth flag.
+    private var isAppInBackground = false
+
     init() {
-        // Listen for the app entering the background. Any inference that
-        // was running gets paused at the next safe checkpoint so the GPU
-        // state can settle — otherwise iOS suspending us mid-decode can
-        // corrupt the Metal command buffer / KV cache and the next ggml
-        // call crashes with `ggml_abort`. Flipping `isPaused` here (not
-        // just cancelling silently) gives the user a clear paused-state
-        // UI to come back to instead of looking like the analysis
-        // vanished.
+        // Track foreground/background via paired notifications — only
+        // pause inference when we're GENUINELY backgrounded (i.e.
+        // received didEnterBackground and haven't gotten the matching
+        // willEnterForeground yet). Single-image runs survive this
+        // path fine; multi-image runs were getting falsely paused
+        // because the previous applicationState-at-notification check
+        // would sometimes read .background during transient race
+        // windows in the OCR loop's `await` points.
         Task { [weak self] in
             for await _ in NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification) {
-                self?.pauseFromBackgroundIfActuallyBackgrounded()
+                self?.handleAppDidEnterBackground()
             }
         }
+        Task { [weak self] in
+            for await _ in NotificationCenter.default.notifications(named: UIApplication.willEnterForegroundNotification) {
+                self?.handleAppWillEnterForeground()
+            }
+        }
+    }
+
+    private func handleAppDidEnterBackground() {
+        isAppInBackground = true
+        // GPU-state defense: pause any in-flight inference at the
+        // next safe checkpoint. iOS suspending us mid-decode can
+        // corrupt the Metal command buffer / KV cache and the next
+        // ggml call crashes with `ggml_abort`. Flipping `isPaused`
+        // (not just cancelling silently) gives the user a clear
+        // paused-state UI to come back to.
+        if isProcessing {
+            cancelInference()
+            isPaused = true
+        }
+    }
+
+    private func handleAppWillEnterForeground() {
+        // The user is bringing the app back — clear the flag so
+        // subsequent stale notifications (which can fire during
+        // brief lifecycle blips) don't re-pause us.
+        isAppInBackground = false
     }
 
     /// Stops the inference loop at the next safe checkpoint. Internal —
@@ -98,33 +134,6 @@ final class InferenceEngine: ObservableObject {
         isPaused = true
     }
 
-    /// Background-observer entry point. Same effect as `pauseInference()`
-    /// — but only fires when the app is GENUINELY in the background.
-    /// Three reasons for the guard:
-    ///   1. iOS delivers `didEnterBackgroundNotification` for brief
-    ///      lifecycle blips (notification banner pull-down, FaceID
-    ///      prompt, lock-screen peek), and the AsyncSequence reading
-    ///      those can deliver one *after* we've already returned to
-    ///      foreground.
-    ///   2. The `.inactive` state (incoming call, Control Center
-    ///      pulled down, system alert briefly visible) is not real
-    ///      backgrounding — the Metal command buffer is still safe,
-    ///      so there's no `ggml_abort` risk. Pausing for these blips
-    ///      kept interrupting normal analyses around 25% (during the
-    ///      Apple Health metrics await) for no good reason.
-    ///   3. Tapping Resume after a wrongful auto-pause would
-    ///      immediately re-pause from another queued blip, creating
-    ///      the "Resume button flickers and comes back" loop.
-    ///
-    /// `applicationState == .background` is the strictest, most
-    /// honest check: we only pause when iOS has actually parked us in
-    /// the background and the GPU state really is at risk.
-    private func pauseFromBackgroundIfActuallyBackgrounded() {
-        guard isProcessing else { return }
-        guard UIApplication.shared.applicationState == .background else { return }
-        cancelInference()
-        isPaused = true
-    }
 
     /// Picks up the most recent paused / incomplete report and re-runs
     /// the LLM step against its saved OCR text. Mirrors the existing
